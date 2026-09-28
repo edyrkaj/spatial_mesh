@@ -275,6 +275,11 @@ extension LiDARScanViewController: ScanOverlayControlsDelegate {
   }
 
   func overlayDidTapDone() { finishScan(format: preferredFormat.rawValue) }
+  func overlayDidTapShoot() {
+    if #available(iOS 17.0, *) {
+      objectDriver?.shoot()
+    }
+  }
 }
 
 @available(iOS 17.0, *)
@@ -362,6 +367,7 @@ private extension LiDARScanViewController {
     }
     isFinishing = true
     objectPhase = .building
+    removeObjectCamera()
     let epoch = scanEpoch
     overlay.showStatus("Building the 3D object…")
     overlay.updateTracking("Photogrammetry is turning the orbit into a textured mesh. This can take a few minutes.", level: "warn")
@@ -439,6 +445,7 @@ private extension LiDARScanViewController {
       canFinish: count >= 16 && !isFinishing && objectPhase == .capturing,
       preserveStatus: true
     )
+    overlay.showShootButton(objectPhase == .capturing && !isFinishing && !isPaused)
   }
 }
 

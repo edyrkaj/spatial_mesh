@@ -5,6 +5,7 @@ protocol ScanOverlayControlsDelegate: AnyObject {
   func overlayDidTapPause()
   func overlayDidTapReset()
   func overlayDidTapDone()
+  func overlayDidTapShoot()
 }
 
 /// Native overlay for Start / Pause / Reset / Done + tracking feedback.
@@ -18,6 +19,7 @@ final class ScanOverlayControls: UIView {
   private let pauseButton = UIButton(type: .system)
   private let resetButton = UIButton(type: .system)
   private let doneButton = UIButton(type: .system)
+  private let shootButton = UIButton(type: .system)
   private let stack = UIStackView()
 
   override init(frame: CGRect) {
@@ -51,12 +53,12 @@ final class ScanOverlayControls: UIView {
   func updateObjectCoverage(shots: Int) {
     meshCountLabel.numberOfLines = 2
     meshCountLabel.text = shots == 0
-      ? "Ring, then top, then tip the object for the underside"
-      : "Photo \(shots) of 16 · follow the next mark"
-    meshCountLabel.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
-    UIView.animate(withDuration: 0.35) {
-      self.meshCountLabel.transform = .identity
-    }
+      ? "Move to the mark, hold still, then tap Shoot"
+      : "Photo \(min(shots, 16)) of 16"
+  }
+
+  func showShootButton(_ visible: Bool) {
+    shootButton.isHidden = !visible
   }
 
   func showStatus(_ text: String) {
@@ -98,6 +100,7 @@ final class ScanOverlayControls: UIView {
     trackingLabel.textColor = .white
     trackingLabel.text = "Waiting for AR session…"
     updateMeshCount(0)
+    showShootButton(false)
     updateScanState(isRunning: false, isPaused: false, canFinish: false)
   }
 
@@ -126,6 +129,8 @@ final class ScanOverlayControls: UIView {
     configure(pauseButton, title: "Pause", action: #selector(pauseTapped))
     configure(resetButton, title: "Reset", action: #selector(resetTapped))
     configure(doneButton, title: "Done", action: #selector(doneTapped), prominent: true)
+    configure(shootButton, title: "Shoot", action: #selector(shootTapped), prominent: true)
+    shootButton.isHidden = true
 
     let buttons = UIStackView(arrangedSubviews: [startButton, pauseButton, resetButton, doneButton])
     buttons.axis = .horizontal
@@ -138,6 +143,7 @@ final class ScanOverlayControls: UIView {
     stack.addArrangedSubview(statusLabel)
     stack.addArrangedSubview(trackingLabel)
     stack.addArrangedSubview(meshCountLabel)
+    stack.addArrangedSubview(shootButton)
     stack.addArrangedSubview(buttons)
 
     let panel = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
@@ -177,4 +183,5 @@ final class ScanOverlayControls: UIView {
   @objc private func pauseTapped() { delegate?.overlayDidTapPause() }
   @objc private func resetTapped() { delegate?.overlayDidTapReset() }
   @objc private func doneTapped() { delegate?.overlayDidTapDone() }
+  @objc private func shootTapped() { delegate?.overlayDidTapShoot() }
 }

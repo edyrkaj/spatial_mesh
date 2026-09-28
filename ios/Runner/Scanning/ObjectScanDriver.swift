@@ -61,10 +61,10 @@ final class ObjectScanDriver: ObservableObject {
 
     var configuration = ObjectCaptureSession.Configuration()
     configuration.checkpointDirectory = checkpoint
-    configuration.isOverCaptureEnabled = true
+    configuration.isOverCaptureEnabled = false
     session.start(imagesDirectory: images, configuration: configuration)
     if #available(iOS 18.0, *) {
-      session.isAutoCaptureEnabled = true
+      session.isAutoCaptureEnabled = false
       session.shouldPlayHaptics = true
     }
     session.startDetecting()
@@ -72,11 +72,21 @@ final class ObjectScanDriver: ObservableObject {
     onStatus?("Center the object in the box, then tap Start", "warn")
   }
 
+  func shoot() {
+    guard isActive, didStartCapturing else { return }
+    guard session.canRequestImageCapture else {
+      onStatus?("Move to the mark, hold still, then tap Shoot again", "warn")
+      return
+    }
+    session.requestImageCapture()
+    onStatus?(Self.nextPosition(shots: shots, passComplete: passComplete), "good")
+  }
+
   func beginCapturing() {
     guard isActive, !didStartCapturing else { return }
     didStartCapturing = true
     session.startCapturing()
-    onStatus?("Follow the ring: around, then top, then tip the object for the underside", "good")
+    onStatus?(Self.nextPosition(shots: 0, passComplete: false), "good")
   }
 
   func pause() {
@@ -305,20 +315,30 @@ struct ObjectScanCamera: View {
   @ObservedObject var driver: ObjectScanDriver
 
   var body: some View {
-    ZStack {
-      if driver.isActive {
-        ObjectCaptureView(session: driver.session)
-          .ignoresSafeArea()
-      } else {
-        Color.black.ignoresSafeArea()
-      }
+    ZStack(alignment: .bottomLeading) {
+      FixedObjectCapture(session: driver.session)
+        .ignoresSafeArea()
       OrbitStoryboard(shots: driver.shots, passComplete: driver.passComplete)
         .padding(.leading, 12)
-        .padding(.bottom, 210)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .padding(.bottom, 230)
         .allowsHitTesting(false)
     }
   }
+}
+
+/// Builds the capture view once. Rebuilding it after the session ends crashes with
+/// "Cannot make a view for a deinitialized ObjectCaptureSession".
+@available(iOS 17.0, *)
+private struct FixedObjectCapture: UIViewControllerRepresentable {
+  let session: ObjectCaptureSession
+
+  func makeUIViewController(context: Context) -> UIHostingController<ObjectCaptureView<EmptyView>> {
+    let host = UIHostingController(rootView: ObjectCaptureView(session: session))
+    host.view.backgroundColor = .black
+    return host
+  }
+
+  func updateUIViewController(_ controller: UIHostingController<ObjectCaptureView<EmptyView>>, context: Context) {}
 }
 
 /// Photo plan over the live camera: a circle around the object, then the top, then the underside.
