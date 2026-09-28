@@ -28,11 +28,11 @@ On first launch, grant camera permission. Use **Start** → sweep surfaces slowl
 
 | Format | Writer | Notes |
 |--------|--------|-------|
-| `.usdz` | ModelIO `MDLAsset.export` | Default |
+| `.gltf` | Custom glTF 2.0 | Default. Full mesh with camera colors baked onto the surface |
+| `.usdz` | SceneKit `SCNScene.write` | ModelIO rejects `.usdz` on device |
 | `.obj` | ModelIO | Interchange fallback |
-| `.gltf` | Custom minimal glTF 2.0 | Geometry only (positions + indices). ModelIO does **not** write glTF |
 
-Exports land under the app temporary directory (`…/spatial_mesh_exports/`). The Flutter Scan tab shows the returned path.
+Done saves the mesh under the app Documents folder (`Documents/scans/`). That file stays on the phone, shows in the Library tab, and is the file the share sheet sends. The same folder is visible in the Files app.
 
 ## Architecture
 

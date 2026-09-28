@@ -5,6 +5,8 @@ import UIKit
 enum LiDARScanRegistry {
   static weak var activeController: LiDARScanViewController?
   static weak var plugin: LiDARScanPlugin?
+  /// Format used by the native Done button. Flutter updates this from the Scan menu.
+  static var exportFormat: MeshExportFormat = .gltf
 }
 
 final class LiDARScanPlatformViewFactory: NSObject, FlutterPlatformViewFactory {

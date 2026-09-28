@@ -52,7 +52,7 @@ spatial_mesh/
 | `MeshWireframeVisualizer.swift` | `MeshWireframeVisualizer` | `ARMeshAnchor` → RealityKit `ModelEntity` preview |
 | `ScanOverlayControls.swift` | `ScanOverlayControls` | Native Start / Pause / Reset / Done + tracking / mesh-count labels |
 | `TrackingQualityMonitor.swift` | `TrackingQualityMonitor` | Maps `ARCamera.trackingState` → overlay / Flutter payloads |
-| `MeshExportUtility.swift` | `MeshExportUtility`, `MeshExportFormat` | Extract world-space mesh, weld/clean/decimate, write `.usdz` / `.obj` (ModelIO) and `.gltf` (custom) |
+| `MeshExportUtility.swift` | `MeshExportUtility`, `MeshExportFormat` | Extract world-space mesh, weld/clean, write `.usdz` / `.obj` and full-resolution `.gltf` |
 | `LiDARScanPlatformView.swift` | factory + platform view | Flutter `UiKitView` embedding; event fan-out |
 | `LiDARScanPlugin.swift` | `LiDARScanPlugin` | Method + event channels; returns export path on `finishScan` |
 
@@ -76,9 +76,9 @@ spatial_mesh/
 
 | Format | Status |
 |--------|--------|
-| USDZ | ModelIO `MDLAsset.export(to:)` |
+| USDZ | SceneKit `SCNScene.write(to:)`. ModelIO `export(to:)` cannot write `.usdz` |
 | OBJ | ModelIO `MDLAsset.export(to:)` |
-| glTF | **Not** supported by ModelIO on iOS — custom minimal glTF 2.0 writer (positions + triangle indices, embedded buffer, no materials) |
+| glTF | Default. Full-resolution glTF 2.0 matching the live mesh: positions, live normals, unlit cyan, embedded buffer |
 
 ## Info.plist
 
@@ -96,7 +96,7 @@ Simulator: Flutter UI + unsupported / capability messaging only. Live mesh requi
 
 ## Next steps (post Phase 1)
 
-1. Persist export paths into the project library (still local).
+1. Persist export paths into the project library (Documents/scans, share from Library).
 2. Optional Metal depth filtering / better mesh simplification.
 3. Richer glTF (normals, materials) or USDZ preview in-library.
 4. Pigeon typed contracts once the channel API stabilizes.

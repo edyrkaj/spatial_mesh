@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:spatial_mesh/bridge/lidar_scan_channel.dart';
+import 'package:spatial_mesh/features/library/scan_library.dart';
 import 'package:spatial_mesh/features/scan/lidar_scan_view.dart';
 
 class ScanPage extends StatefulWidget {
@@ -23,7 +24,7 @@ class _ScanPageState extends State<ScanPage> {
   String? _lastExportPath;
   String? _error;
   bool _exporting = false;
-  String _format = 'usdz';
+  String _format = 'gltf';
 
   @override
   void initState() {
@@ -55,6 +56,7 @@ class _ScanPageState extends State<ScanPage> {
   void _onEvent(Map<String, dynamic> event) {
     if (!mounted) return;
     final type = event['type'] as String? ?? '';
+    String? completedPath;
     setState(() {
       switch (type) {
         case 'capability':
@@ -78,8 +80,38 @@ class _ScanPageState extends State<ScanPage> {
         case 'done':
           _lastExportPath = event['path'] as String?;
           _error = event['error'] as String?;
+          if (_error == null) {
+            final path = _lastExportPath;
+            if (path != null && path.isNotEmpty) {
+              _status = 'exported';
+              completedPath = path;
+            }
+          }
       }
     });
+    final savedPath = completedPath;
+    if (savedPath != null) {
+      _notifyScanCompleted(savedPath);
+    }
+  }
+
+  void _notifyScanCompleted(String path) {
+    unawaited(ScanLibraryController.instance.reload());
+    final name = _fileName(path);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+        content: Text('Scan completed\n$name'),
+      ),
+    );
+  }
+
+  String _fileName(String path) {
+    final name = path.split('/').where((part) => part.isNotEmpty).last;
+    return name.isEmpty ? 'scan' : name;
   }
 
   Future<void> _finish() async {
@@ -90,15 +122,11 @@ class _ScanPageState extends State<ScanPage> {
     try {
       final result = await LidarScanChannel.finishScan(format: _format);
       if (!mounted) return;
+      final path = result['path'] as String?;
       setState(() {
-        _lastExportPath = result['path'] as String?;
+        _lastExportPath = path;
         _status = 'exported';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Exported to ${_lastExportPath ?? "(unknown)"}'),
-        ),
-      );
     } on PlatformException catch (error) {
       if (!mounted) return;
       setState(() => _error = error.message ?? error.code);
@@ -125,11 +153,14 @@ class _ScanPageState extends State<ScanPage> {
           PopupMenuButton<String>(
             initialValue: _format,
             tooltip: 'Export format',
-            onSelected: (value) => setState(() => _format = value),
+            onSelected: (value) {
+              setState(() => _format = value);
+              unawaited(LidarScanChannel.setExportFormat(value));
+            },
             itemBuilder: (context) => const [
-              PopupMenuItem(value: 'usdz', child: Text('USDZ (ModelIO)')),
-              PopupMenuItem(value: 'gltf', child: Text('glTF (custom)')),
-              PopupMenuItem(value: 'obj', child: Text('OBJ (ModelIO)')),
+              PopupMenuItem(value: 'gltf', child: Text('glTF (Three.js)')),
+              PopupMenuItem(value: 'usdz', child: Text('USDZ')),
+              PopupMenuItem(value: 'obj', child: Text('OBJ')),
             ],
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -173,8 +204,13 @@ class _ScanPageState extends State<ScanPage> {
                   ],
                   if (_lastExportPath != null) ...[
                     const SizedBox(height: 8),
+                    Text(
+                      'File: ${_fileName(_lastExportPath!)}',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
                     SelectableText(
-                      'Last export:\n$_lastExportPath',
+                      _lastExportPath!,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ],
@@ -233,7 +269,7 @@ class _ScanPageState extends State<ScanPage> {
       case 'reset':
         return 'Reset';
       case 'exported':
-        return 'Export complete';
+        return 'Scan completed';
       default:
         return 'Ready';
     }

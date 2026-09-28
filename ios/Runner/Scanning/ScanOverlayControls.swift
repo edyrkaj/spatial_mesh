@@ -61,8 +61,15 @@ final class ScanOverlayControls: UIView {
   }
 
   func showError(_ message: String) {
+    statusLabel.numberOfLines = 3
     statusLabel.text = message
     statusLabel.textColor = UIColor(red: 1.0, green: 0.45, blue: 0.4, alpha: 1)
+  }
+
+  func showCompleted(fileName: String) {
+    statusLabel.numberOfLines = 2
+    statusLabel.text = "Scan completed\n\(fileName)"
+    statusLabel.textColor = UIColor(red: 0.55, green: 0.95, blue: 0.7, alpha: 1)
   }
 
   func clearError() {

@@ -24,6 +24,8 @@
 		7970C7C0385291DDB3362EF0 /* MeshWireframeVisualizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B4030E671BE7B8E305F090F /* MeshWireframeVisualizer.swift */; };
 		8499A2BFB3DE1F57E91C4908 /* ScanOverlayControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CD854F73568C36103011BD1 /* ScanOverlayControls.swift */; };
 		1FAF76FC0C0DF2CDDE3CA8A1 /* TrackingQualityMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A439E2CEAF3EA8EFA3AC8D1A /* TrackingQualityMonitor.swift */; };
+		A7B1C2D3E4F5061728394A5B /* ScanStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8C2D3E4F5061728394A5B6C /* ScanStorage.swift */; };
+		C3D4E5F60718293A4B5C6D7E /* ScanColorCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* ScanColorCapture.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,6 +77,8 @@
 		5B4030E671BE7B8E305F090F /* MeshWireframeVisualizer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = MeshWireframeVisualizer.swift; sourceTree = "<group>"; };
 		2CD854F73568C36103011BD1 /* ScanOverlayControls.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ScanOverlayControls.swift; sourceTree = "<group>"; };
 		A439E2CEAF3EA8EFA3AC8D1A /* TrackingQualityMonitor.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TrackingQualityMonitor.swift; sourceTree = "<group>"; };
+		B8C2D3E4F5061728394A5B6C /* ScanStorage.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ScanStorage.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5C6D7E8F /* ScanColorCapture.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ScanColorCapture.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -155,6 +159,8 @@
 				5EA3ECF13D69599F661616A2 /* MeshExportUtility.swift */,
 				5B4030E671BE7B8E305F090F /* MeshWireframeVisualizer.swift */,
 				2CD854F73568C36103011BD1 /* ScanOverlayControls.swift */,
+				D4E5F60718293A4B5C6D7E8F /* ScanColorCapture.swift */,
+				B8C2D3E4F5061728394A5B6C /* ScanStorage.swift */,
 				A439E2CEAF3EA8EFA3AC8D1A /* TrackingQualityMonitor.swift */,
 			);
 			path = Scanning;
@@ -321,6 +327,8 @@
 				291EC4C1ADBAE8727FB4B1BF /* MeshExportUtility.swift in Sources */,
 				7970C7C0385291DDB3362EF0 /* MeshWireframeVisualizer.swift in Sources */,
 				8499A2BFB3DE1F57E91C4908 /* ScanOverlayControls.swift in Sources */,
+				C3D4E5F60718293A4B5C6D7E /* ScanColorCapture.swift in Sources */,
+				A7B1C2D3E4F5061728394A5B /* ScanStorage.swift in Sources */,
 				1FAF76FC0C0DF2CDDE3CA8A1 /* TrackingQualityMonitor.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,

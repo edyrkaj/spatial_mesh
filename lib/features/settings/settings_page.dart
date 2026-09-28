@@ -19,7 +19,7 @@ class SettingsPage extends StatelessWidget {
           ),
           ListTile(
             title: Text('Export formats'),
-            subtitle: Text('USDZ and OBJ via ModelIO. glTF via a minimal custom writer (geometry only).'),
+            subtitle: Text('Default is glTF for Three.js. USDZ and OBJ stay available from the Scan menu.'),
           ),
         ],
       ),

@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:spatial_mesh/features/library/project_library_page.dart';
+import 'package:spatial_mesh/features/library/scan_library.dart';
 import 'package:spatial_mesh/features/scan/scan_page.dart';
 import 'package:spatial_mesh/features/settings/settings_page.dart';
 
@@ -50,7 +53,12 @@ class _HomeShellState extends State<_HomeShell> {
       body: IndexedStack(index: _index, children: _pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (value) => setState(() => _index = value),
+        onDestinationSelected: (value) {
+          setState(() => _index = value);
+          if (value == 0) {
+            unawaited(ScanLibraryController.instance.reload());
+          }
+        },
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.folder_outlined),

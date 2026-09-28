@@ -16,12 +16,13 @@ final class LiDARScanViewController: UIViewController {
   private let overlay = ScanOverlayControls()
   private let visualizer = MeshWireframeVisualizer()
   private let exporter = MeshExportUtility()
+  private let colorCapture = ScanColorCapture()
   private var meshAnchors: [UUID: ARMeshAnchor] = [:]
 
   private var isRunning = false
   private var isPaused = false
   private var isFinishing = false
-  private var preferredFormat: MeshExportFormat = .usdz
+  private var preferredFormat: MeshExportFormat = LiDARScanRegistry.exportFormat
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -63,6 +64,7 @@ final class LiDARScanViewController: UIViewController {
     } else {
       meshAnchors.removeAll()
       visualizer.clear(from: arView)
+      colorCapture.reset()
       arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
     }
     isRunning = true
@@ -83,6 +85,7 @@ final class LiDARScanViewController: UIViewController {
   func resetScan() {
     meshAnchors.removeAll()
     visualizer.clear(from: arView)
+    colorCapture.reset()
     isPaused = false
     isRunning = false
     arView.session.pause()
@@ -95,9 +98,11 @@ final class LiDARScanViewController: UIViewController {
     guard !isFinishing else { return }
     if let format, let parsed = MeshExportFormat(rawValue: format.lowercased()) {
       preferredFormat = parsed
+      LiDARScanRegistry.exportFormat = parsed
     }
 
     let anchors = Array(meshAnchors.values)
+    let frames = colorCapture.snapshot()
     guard !anchors.isEmpty else {
       let message = MeshExportError.emptyMesh.localizedDescription
       overlay.showError(message)
@@ -109,16 +114,16 @@ final class LiDARScanViewController: UIViewController {
     isFinishing = true
     overlay.clearError()
     overlay.updateScanState(isRunning: isRunning, isPaused: isPaused, canFinish: false)
-    statusBusy("Exporting mesh…")
+    statusBusy("Saving scan…")
 
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
       guard let self else { return }
       do {
-        let directory = FileManager.default.temporaryDirectory
-          .appendingPathComponent("spatial_mesh_exports", isDirectory: true)
+        let directory = ScanStorage.directory
         let basename = "scan_\(Self.timestamp())"
         let url = try self.exporter.export(
           meshAnchors: anchors,
+          colorFrames: frames,
           format: self.preferredFormat,
           to: directory,
           basename: basename
@@ -127,6 +132,7 @@ final class LiDARScanViewController: UIViewController {
           self.isFinishing = false
           self.pauseScan()
           self.refreshOverlayState()
+          self.overlay.showCompleted(fileName: url.lastPathComponent)
           self.emit([
             "type": "exportComplete",
             "path": url.path,
@@ -213,10 +219,20 @@ extension LiDARScanViewController: ScanOverlayControlsDelegate {
   func overlayDidTapStart() { startScan() }
   func overlayDidTapPause() { pauseScan() }
   func overlayDidTapReset() { resetScan() }
+  func setExportFormat(_ format: MeshExportFormat) {
+    preferredFormat = format
+    LiDARScanRegistry.exportFormat = format
+  }
+
   func overlayDidTapDone() { finishScan(format: preferredFormat.rawValue) }
 }
 
 extension LiDARScanViewController: ARSessionDelegate {
+  func session(_ session: ARSession, didUpdate frame: ARFrame) {
+    guard isRunning else { return }
+    colorCapture.record(frame)
+  }
+
   func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
     handle(anchors: anchors, removed: false)
   }
