@@ -9,7 +9,7 @@ final class MeshWireframeVisualizer {
 
   init() {
     var mat = UnlitMaterial()
-    mat.color = .init(tint: .init(red: 0.35, green: 0.85, blue: 0.95, alpha: 0.4))
+    mat.color = .init(tint: .init(red: 0.35, green: 0.85, blue: 0.95, alpha: 0.16))
     material = mat
   }
 

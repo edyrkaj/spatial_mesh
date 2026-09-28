@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:spatial_mesh/bridge/lidar_scan_channel.dart';
 import 'package:spatial_mesh/features/library/scan_library.dart';
 import 'package:spatial_mesh/features/scan/lidar_scan_view.dart';
@@ -18,12 +17,6 @@ class _ScanPageState extends State<ScanPage> {
   bool _checking = true;
   bool _available = false;
   String? _unsupportedReason;
-  String _tracking = 'Waiting for scanner…';
-  String _status = 'Idle';
-  int _meshCount = 0;
-  String? _lastExportPath;
-  String? _error;
-  bool _exporting = false;
   String _format = 'gltf';
 
   @override
@@ -56,42 +49,22 @@ class _ScanPageState extends State<ScanPage> {
   void _onEvent(Map<String, dynamic> event) {
     if (!mounted) return;
     final type = event['type'] as String? ?? '';
-    String? completedPath;
-    setState(() {
-      switch (type) {
-        case 'capability':
+    switch (type) {
+      case 'capability':
+        setState(() {
           _available = event['available'] == true;
           _unsupportedReason = event['reason'] as String?;
-        case 'tracking':
-          _tracking = event['message'] as String? ?? _tracking;
-        case 'meshCount':
-          _meshCount = (event['count'] as num?)?.toInt() ?? _meshCount;
-        case 'scanState':
-          _status = event['state'] as String? ?? _status;
-          if (event['meshCount'] != null) {
-            _meshCount = (event['meshCount'] as num).toInt();
-          }
-        case 'exportComplete':
-          _lastExportPath = event['path'] as String?;
-          _error = null;
-          _status = 'exported';
-        case 'error':
-          _error = event['message'] as String? ?? 'Unknown scanner error';
-        case 'done':
-          _lastExportPath = event['path'] as String?;
-          _error = event['error'] as String?;
-          if (_error == null) {
-            final path = _lastExportPath;
-            if (path != null && path.isNotEmpty) {
-              _status = 'exported';
-              completedPath = path;
-            }
-          }
-      }
-    });
-    final savedPath = completedPath;
-    if (savedPath != null) {
-      _notifyScanCompleted(savedPath);
+        });
+      case 'scanState':
+        if (event['state'] == 'reset') {
+          ScaffoldMessenger.of(context).clearSnackBars();
+        }
+      case 'done':
+        final error = event['error'] as String?;
+        final path = event['path'] as String?;
+        if (error == null && path != null && path.isNotEmpty) {
+          _notifyScanCompleted(path);
+        }
     }
   }
 
@@ -112,30 +85,6 @@ class _ScanPageState extends State<ScanPage> {
   String _fileName(String path) {
     final name = path.split('/').where((part) => part.isNotEmpty).last;
     return name.isEmpty ? 'scan' : name;
-  }
-
-  Future<void> _finish() async {
-    setState(() {
-      _exporting = true;
-      _error = null;
-    });
-    try {
-      final result = await LidarScanChannel.finishScan(format: _format);
-      if (!mounted) return;
-      final path = result['path'] as String?;
-      setState(() {
-        _lastExportPath = path;
-        _status = 'exported';
-      });
-    } on PlatformException catch (error) {
-      if (!mounted) return;
-      setState(() => _error = error.message ?? error.code);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _error = '$error');
-    } finally {
-      if (mounted) setState(() => _exporting = false);
-    }
   }
 
   @override
@@ -169,109 +118,11 @@ class _ScanPageState extends State<ScanPage> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: _checking
-                ? const Center(child: CircularProgressIndicator())
-                : LidarScanView(
-                    unsupportedReason: _available ? null : _unsupportedReason,
-                  ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(_statusLabel, style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 4),
-                  Text(_tracking, style: Theme.of(context).textTheme.bodySmall),
-                  const SizedBox(height: 4),
-                  Text(
-                    _meshCount == 0
-                        ? 'No mesh captured yet'
-                        : 'Mesh anchors: $_meshCount',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      _error!,
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
-                    ),
-                  ],
-                  if (_lastExportPath != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'File: ${_fileName(_lastExportPath!)}',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 4),
-                    SelectableText(
-                      _lastExportPath!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      FilledButton(
-                        onPressed: !_available || _exporting
-                            ? null
-                            : () => LidarScanChannel.startScan(),
-                        child: const Text('Start'),
-                      ),
-                      OutlinedButton(
-                        onPressed: !_available || _exporting
-                            ? null
-                            : () => LidarScanChannel.pauseScan(),
-                        child: const Text('Pause'),
-                      ),
-                      OutlinedButton(
-                        onPressed: !_available || _exporting
-                            ? null
-                            : () => LidarScanChannel.resetScan(),
-                        child: const Text('Reset'),
-                      ),
-                      FilledButton.tonal(
-                        onPressed: !_available || _exporting || _meshCount == 0
-                            ? null
-                            : _finish,
-                        child: _exporting
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Text('Done'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+      body: _checking
+          ? const Center(child: CircularProgressIndicator())
+          : LidarScanView(
+              unsupportedReason: _available ? null : _unsupportedReason,
             ),
-          ),
-        ],
-      ),
     );
-  }
-
-  String get _statusLabel {
-    switch (_status) {
-      case 'running':
-        return 'Scanning';
-      case 'paused':
-        return 'Paused';
-      case 'reset':
-        return 'Reset';
-      case 'exported':
-        return 'Scan completed';
-      default:
-        return 'Ready';
-    }
   }
 }

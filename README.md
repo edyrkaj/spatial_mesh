@@ -22,17 +22,17 @@ flutter run -d <your-device-id> --release
 
 Or open `ios/Runner.xcworkspace` / `ios/Runner.xcodeproj` in Xcode, select your team for signing, and run on the device.
 
-On first launch, grant camera permission. Use **Start** → sweep surfaces slowly → **Done** to export.
+Done saves a textured `.gltf` of one object. On iOS 17, tap **Start**, fit the box, tap **Start** again, and orbit until sparkles cover the surface. The saved model is a photogrammetry mesh, not the coarse room shape.
 
 ## Export formats
 
 | Format | Writer | Notes |
 |--------|--------|-------|
-| `.gltf` | Custom glTF 2.0 | Default. Full mesh with camera colors baked onto the surface |
+| `.gltf` | Custom glTF 2.0 | Default. Dense LiDAR depth surface with camera color |
 | `.usdz` | SceneKit `SCNScene.write` | ModelIO rejects `.usdz` on device |
 | `.obj` | ModelIO | Interchange fallback |
 
-Done saves the mesh under the app Documents folder (`Documents/scans/`). That file stays on the phone, shows in the Library tab, and is the file the share sheet sends. The same folder is visible in the Files app.
+Done saves the mesh under the app Documents folder (`Documents/scans/`). That file stays on the phone, shows in the Library tab, and can be viewed, shared, or deleted. View opens the mesh in the app. Share sends that same file. The same folder is visible in the Files app.
 
 ## Architecture
 

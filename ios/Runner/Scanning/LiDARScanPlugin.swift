@@ -23,6 +23,9 @@ final class LiDARScanPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
 
     let factory = LiDARScanPlatformViewFactory(messenger: registrar.messenger())
     registrar.register(factory, withId: "com.spatialmesh/lidar_scan_view")
+
+    let meshFactory = ScanMeshPlatformViewFactory()
+    registrar.register(meshFactory, withId: "com.spatialmesh/scan_mesh_view")
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

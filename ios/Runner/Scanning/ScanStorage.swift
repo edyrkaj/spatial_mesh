@@ -33,6 +33,15 @@ enum ScanStorage {
     }
   }
 
+  /// The file at `path` when it lives in Documents/scans.
+  static func savedFile(path: String) throws -> URL {
+    let url = try fileInsideScans(path)
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      throw ScanStorageError.missing
+    }
+    return url
+  }
+
   static func share(path: String) throws {
     let url = try fileInsideScans(path)
     guard FileManager.default.fileExists(atPath: url.path) else {

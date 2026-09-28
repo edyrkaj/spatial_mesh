@@ -1,6 +1,7 @@
 import ARKit
 import Flutter
 import RealityKit
+import SwiftUI
 import UIKit
 
 protocol LiDARScanViewControllerDelegate: AnyObject {
@@ -22,7 +23,19 @@ final class LiDARScanViewController: UIViewController {
   private var isRunning = false
   private var isPaused = false
   private var isFinishing = false
+  private var scanEpoch = 0
   private var preferredFormat: MeshExportFormat = LiDARScanRegistry.exportFormat
+  private var objectPhase: ObjectPhase = .idle
+  private var objectDriverBox: AnyObject?
+  private var objectHost: UIViewController?
+  private var objectBuild: Task<Void, Never>?
+
+  private enum ObjectPhase {
+    case idle
+    case detecting
+    case capturing
+    case building
+  }
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -50,6 +63,10 @@ final class LiDARScanViewController: UIViewController {
   // MARK: - Public commands (Flutter channel + overlay)
 
   func startScan() {
+    if #available(iOS 17.0, *), PhotogrammetrySession.isSupported {
+      startObjectScan()
+      return
+    }
     guard LiDARCapability.isSupported else {
       let reason = LiDARCapability.unsupportedReason ?? "LiDAR unavailable"
       overlay.showError(reason)
@@ -74,6 +91,14 @@ final class LiDARScanViewController: UIViewController {
   }
 
   func pauseScan() {
+    if #available(iOS 17.0, *), objectPhase == .capturing || objectPhase == .detecting {
+      objectDriver?.pause()
+      isRunning = false
+      isPaused = true
+      refreshObjectControls()
+      emit(["type": "scanState", "state": "paused"])
+      return
+    }
     guard isRunning else { return }
     arView.session.pause()
     isRunning = false
@@ -83,15 +108,32 @@ final class LiDARScanViewController: UIViewController {
   }
 
   func resetScan() {
+    scanEpoch += 1
+    objectBuild?.cancel()
+    objectBuild = nil
+    if #available(iOS 17.0, *) {
+      objectDriver?.cancel()
+      objectDriver = nil
+      objectHost?.view.removeFromSuperview()
+      objectHost?.removeFromParent()
+      objectHost = nil
+    }
+    objectPhase = .idle
+    arView.isHidden = false
     meshAnchors.removeAll()
     visualizer.clear(from: arView)
     colorCapture.reset()
     isPaused = false
     isRunning = false
+    isFinishing = false
+    if LiDARCapability.isSupported {
+      let configuration = LiDARCapability.makeWorldTrackingConfiguration()
+      arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+    }
     arView.session.pause()
-    overlay.clearError()
-    refreshOverlayState()
+    overlay.prepareForNewScan()
     emit(["type": "scanState", "state": "reset", "meshCount": 0])
+    emit(["type": "meshCount", "count": 0])
   }
 
   func finishScan(format: String?) {
@@ -99,6 +141,11 @@ final class LiDARScanViewController: UIViewController {
     if let format, let parsed = MeshExportFormat(rawValue: format.lowercased()) {
       preferredFormat = parsed
       LiDARScanRegistry.exportFormat = parsed
+    }
+
+    if #available(iOS 17.0, *), objectPhase == .capturing || objectPhase == .detecting {
+      finishObjectScan()
+      return
     }
 
     let anchors = Array(meshAnchors.values)
@@ -112,6 +159,7 @@ final class LiDARScanViewController: UIViewController {
     }
 
     isFinishing = true
+    let epoch = scanEpoch
     overlay.clearError()
     overlay.updateScanState(isRunning: isRunning, isPaused: isPaused, canFinish: false)
     statusBusy("Saving scan…")
@@ -129,7 +177,10 @@ final class LiDARScanViewController: UIViewController {
           basename: basename
         )
         DispatchQueue.main.async {
+          let stillCurrent = self.scanEpoch == epoch
           self.isFinishing = false
+          self.eventDelegate?.scanController(self, didFinishWithPath: url.path, error: nil)
+          guard stillCurrent else { return }
           self.pauseScan()
           self.refreshOverlayState()
           self.overlay.showCompleted(fileName: url.lastPathComponent)
@@ -138,16 +189,17 @@ final class LiDARScanViewController: UIViewController {
             "path": url.path,
             "format": self.preferredFormat.rawValue,
           ])
-          self.eventDelegate?.scanController(self, didFinishWithPath: url.path, error: nil)
         }
       } catch {
         DispatchQueue.main.async {
+          let stillCurrent = self.scanEpoch == epoch
           self.isFinishing = false
           let message = error.localizedDescription
+          self.eventDelegate?.scanController(self, didFinishWithPath: nil, error: message)
+          guard stillCurrent else { return }
           self.overlay.showError(message)
           self.refreshOverlayState()
           self.emit(["type": "error", "code": "EXPORT_FAILED", "message": message])
-          self.eventDelegate?.scanController(self, didFinishWithPath: nil, error: message)
         }
       }
     }
@@ -227,6 +279,159 @@ extension LiDARScanViewController: ScanOverlayControlsDelegate {
   func overlayDidTapDone() { finishScan(format: preferredFormat.rawValue) }
 }
 
+@available(iOS 17.0, *)
+private extension LiDARScanViewController {
+  var objectDriver: ObjectScanDriver? {
+    get { objectDriverBox as? ObjectScanDriver }
+    set { objectDriverBox = newValue }
+  }
+
+  func startObjectScan() {
+    switch objectPhase {
+    case .idle:
+      beginObjectDetecting()
+    case .detecting:
+      beginObjectOrbit()
+    case .capturing where isPaused:
+      objectDriver?.resume()
+      isRunning = true
+      isPaused = false
+      objectPhase = .capturing
+      refreshObjectControls()
+      overlay.showStatus("Orbit slowly. Sparkles in Covered show the scanned surface")
+      emit(["type": "scanState", "state": "running"])
+    default:
+      break
+    }
+  }
+
+  func beginObjectDetecting() {
+    arView.session.pause()
+    arView.isHidden = true
+    let driver = ObjectScanDriver()
+    driver.onStatus = { [weak self] message, level in
+      self?.overlay.showStatus(message)
+      self?.overlay.updateTracking(message, level: level)
+      self?.emit(["type": "tracking", "message": message, "level": level])
+    }
+    driver.onShots = { [weak self] shots in
+      guard let self else { return }
+      self.overlay.updateObjectCoverage(shots: shots)
+      self.refreshObjectControls(shots: shots)
+      self.emit(["type": "meshCount", "count": shots])
+    }
+    objectDriver = driver
+    installObjectCamera(driver)
+    do {
+      try driver.beginDetecting()
+    } catch {
+      overlay.showError(error.localizedDescription)
+      emit(["type": "error", "code": "OBJECT_SCAN", "message": error.localizedDescription])
+      return
+    }
+    objectPhase = .detecting
+    isRunning = false
+    isPaused = false
+    refreshObjectControls()
+    overlay.showStatus("Center the object in the box, then tap Start")
+    emit(["type": "scanState", "state": "running"])
+  }
+
+  func beginObjectOrbit() {
+    objectDriver?.beginCapturing()
+    objectPhase = .capturing
+    isRunning = true
+    isPaused = false
+    refreshObjectControls()
+    overlay.showStatus("Orbit slowly. Sparkles in Covered show the scanned surface")
+    overlay.updateTracking("Walk a full circle. Don’t switch to a blurry video — stills build the mesh.", level: "good")
+    emit(["type": "scanState", "state": "running"])
+  }
+
+  func finishObjectScan() {
+    guard let driver = objectDriver else { return }
+    guard driver.shots >= 12 else {
+      let message = ObjectScanError.notEnoughViews(driver.shots).localizedDescription
+      overlay.showError(message)
+      emit(["type": "error", "code": "NEED_ORBIT", "message": message])
+      return
+    }
+    isFinishing = true
+    objectPhase = .building
+    let epoch = scanEpoch
+    overlay.showStatus("Building the 3D object…")
+    overlay.updateTracking("Photogrammetry is turning the orbit into a textured mesh. This can take a few minutes.", level: "warn")
+    refreshObjectControls()
+    objectBuild = Task { [weak self] in
+      guard let self else { return }
+      do {
+        let url = try await driver.finishAndExport(to: ScanStorage.directory, basename: "object_\(Self.timestamp())")
+        await MainActor.run {
+          guard self.scanEpoch == epoch else { return }
+          self.completeScan(path: url.path, epoch: epoch)
+        }
+      } catch {
+        await MainActor.run {
+          guard self.scanEpoch == epoch else { return }
+          self.failScan(message: error.localizedDescription, epoch: epoch)
+        }
+      }
+    }
+  }
+
+  func installObjectCamera(_ driver: ObjectScanDriver) {
+    objectHost?.view.removeFromSuperview()
+    objectHost?.removeFromParent()
+    let host = UIHostingController(rootView: ObjectScanCamera(driver: driver))
+    host.view.backgroundColor = .black
+    host.view.frame = view.bounds
+    host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    addChild(host)
+    view.insertSubview(host.view, belowSubview: overlay)
+    host.didMove(toParent: self)
+    objectHost = host
+  }
+
+  func completeScan(path: String, epoch: Int) {
+    isFinishing = false
+    objectPhase = .idle
+    isRunning = false
+    isPaused = false
+    eventDelegate?.scanController(self, didFinishWithPath: path, error: nil)
+    guard scanEpoch == epoch else { return }
+    let name = URL(fileURLWithPath: path).lastPathComponent
+    overlay.showCompleted(fileName: name)
+    overlay.updateObjectCoverage(shots: objectDriver?.shots ?? 0)
+    emit([
+      "type": "exportComplete",
+      "path": path,
+      "format": "gltf",
+    ])
+  }
+
+  func failScan(message: String, epoch: Int) {
+    isFinishing = false
+    if objectPhase == .building {
+      objectPhase = .capturing
+    }
+    eventDelegate?.scanController(self, didFinishWithPath: nil, error: message)
+    guard scanEpoch == epoch else { return }
+    overlay.showError(message)
+    refreshObjectControls()
+    emit(["type": "error", "code": "EXPORT_FAILED", "message": message])
+  }
+
+  func refreshObjectControls(shots: Int? = nil) {
+    let count = shots ?? objectDriver?.shots ?? 0
+    overlay.updateScanState(
+      isRunning: isRunning,
+      isPaused: isPaused,
+      canFinish: count >= 12 && !isFinishing && objectPhase == .capturing,
+      preserveStatus: true
+    )
+  }
+}
+
 extension LiDARScanViewController: ARSessionDelegate {
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
     guard isRunning else { return }
@@ -260,6 +465,7 @@ extension LiDARScanViewController: ARSessionDelegate {
   }
 
   private func handle(anchors: [ARAnchor], removed: Bool) {
+    guard objectPhase == .idle else { return }
     for anchor in anchors {
       guard let mesh = anchor as? ARMeshAnchor else { continue }
       if removed {

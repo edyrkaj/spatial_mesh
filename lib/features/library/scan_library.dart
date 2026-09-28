@@ -58,6 +58,13 @@ class ScanLibraryController extends ChangeNotifier {
     scans = scans.where((scan) => scan.path != path).toList();
     notifyListeners();
   }
+
+  @visibleForTesting
+  void debugSetScans(List<SavedScan> value) {
+    scans = value;
+    error = null;
+    notifyListeners();
+  }
 }
 
 String formatScanBytes(int bytes) {

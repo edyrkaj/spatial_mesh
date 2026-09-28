@@ -33,15 +33,16 @@ enum MeshExportError: LocalizedError {
   }
 }
 
-/// Extracts ARMeshGeometry and writes the same triangles shown in the live scan.
+/// Extracts a dense colored surface from LiDAR depth, and falls back to the
+/// coarse ARKit mesh when depth frames are missing.
 ///
 /// Format notes:
 /// - `.usdz` — written via SceneKit `SCNScene.write(to:)`. ModelIO's
 ///   `MDLAsset.export(to:)` rejects `.usdz` (`canExportFileExtension` is false)
 ///   with `MDLErrorDomain` error 0.
 /// - `.obj`  — written via ModelIO (reliable interchange fallback).
-/// - `.gltf` — custom glTF 2.0 for Three.js `GLTFLoader`: full mesh plus camera
-///   colors sampled onto each vertex so the object keeps its real appearance.
+/// - `.gltf` — custom glTF 2.0. The surface is rebuilt from the LiDAR depth
+///   image and painted with the camera, instead of the coarse scene mesh.
 final class MeshExportUtility {
   struct ProcessedMesh {
     var positions: [SIMD3<Float>]
@@ -64,8 +65,25 @@ final class MeshExportUtility {
     to directory: URL,
     basename: String
   ) throws -> URL {
-    var processed = try process(meshAnchors: meshAnchors)
-    processed.colors = colors(for: processed, from: colorFrames)
+    let processed: ProcessedMesh
+    if var dense = depthSurface(from: colorFrames) {
+      dense = removeDegenerateTriangles(dense)
+      if !dense.indices.isEmpty {
+        processed = dense
+      } else if !meshAnchors.isEmpty {
+        var coarse = try process(meshAnchors: meshAnchors)
+        coarse.colors = colors(for: coarse, from: colorFrames)
+        processed = coarse
+      } else {
+        throw MeshExportError.emptyMesh
+      }
+    } else if !meshAnchors.isEmpty {
+      var coarse = try process(meshAnchors: meshAnchors)
+      coarse.colors = colors(for: coarse, from: colorFrames)
+      processed = coarse
+    } else {
+      throw MeshExportError.emptyMesh
+    }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
     switch format {
@@ -336,6 +354,136 @@ final class MeshExportUtility {
     let length = simd_length(normal)
     guard length > 1e-8 else { return SIMD3<Float>(0, 1, 0) }
     return normal / length
+  }
+
+  /// Rebuilds the object from the LiDAR depth images. This is much finer than the
+  /// scene-reconstruction mesh, which is why that mesh looks like large shapes.
+  private func depthSurface(from frames: [ScanColorFrame]) -> ProcessedMesh? {
+    let surfaces = frames.filter { $0.depth.count == $0.width * $0.height && $0.width > 1 }
+    guard !surfaces.isEmpty else { return nil }
+
+    let voxel: Float = 0.006
+    let maxEdge: Float = 0.028
+    var positions: [SIMD3<Float>] = []
+    var colors: [SIMD3<Float>] = []
+    var indices: [UInt32] = []
+    var occupied: [SIMD3<Int32>: (index: UInt32, distance: Float)] = [:]
+
+    for frame in surfaces {
+      let camera = SIMD3<Float>(
+        frame.cameraToWorld.columns.3.x,
+        frame.cameraToWorld.columns.3.y,
+        frame.cameraToWorld.columns.3.z
+      )
+      var local = [Int32](repeating: -1, count: frame.width * frame.height)
+      for row in 0..<frame.height {
+        for column in 0..<frame.width {
+          let sample = row * frame.width + column
+          let meters = frame.depth[sample]
+          guard meters > 0.12 else { continue }
+          guard let world = Self.unproject(column: column, row: row, depth: meters, frame: frame) else { continue }
+          let key = SIMD3<Int32>(
+            Int32((world.x / voxel).rounded()),
+            Int32((world.y / voxel).rounded()),
+            Int32((world.z / voxel).rounded())
+          )
+          let distance = simd_distance(camera, world)
+          let color = Self.color(at: sample, frame: frame)
+          if let existing = occupied[key] {
+            local[sample] = Int32(existing.index)
+            if distance + 0.008 < existing.distance {
+              positions[Int(existing.index)] = world
+              colors[Int(existing.index)] = color
+              occupied[key] = (existing.index, distance)
+            }
+            continue
+          }
+          let index = UInt32(positions.count)
+          positions.append(world)
+          colors.append(color)
+          occupied[key] = (index, distance)
+          local[sample] = Int32(index)
+        }
+      }
+
+      for row in 0..<(frame.height - 1) {
+        for column in 0..<(frame.width - 1) {
+          let i00 = local[row * frame.width + column]
+          let i10 = local[row * frame.width + column + 1]
+          let i01 = local[(row + 1) * frame.width + column]
+          let i11 = local[(row + 1) * frame.width + column + 1]
+          Self.addTriangle(i00, i10, i11, positions: positions, indices: &indices, maxEdge: maxEdge)
+          Self.addTriangle(i00, i11, i01, positions: positions, indices: &indices, maxEdge: maxEdge)
+        }
+      }
+    }
+
+    guard !positions.isEmpty, !indices.isEmpty else { return nil }
+    return ProcessedMesh(
+      positions: positions,
+      normals: Self.normals(for: positions, indices: indices),
+      indices: indices,
+      colors: colors
+    )
+  }
+
+  private static func unproject(column: Int, row: Int, depth: Float, frame: ScanColorFrame) -> SIMD3<Float>? {
+    let fx = frame.intrinsics.columns.0.x
+    let fy = frame.intrinsics.columns.1.y
+    let cx = frame.intrinsics.columns.2.x
+    let cy = frame.intrinsics.columns.2.y
+    guard fx > 1, fy > 1 else { return nil }
+    let x = (Float(column) + 0.5 - cx) * depth / fx
+    let y = -(Float(row) + 0.5 - cy) * depth / fy
+    let world = frame.cameraToWorld * SIMD4<Float>(x, y, -depth, 1)
+    guard world.x.isFinite, world.y.isFinite, world.z.isFinite else { return nil }
+    return SIMD3(world.x, world.y, world.z)
+  }
+
+  private static func color(at sample: Int, frame: ScanColorFrame) -> SIMD3<Float> {
+    let byte = sample * 4
+    guard byte + 2 < frame.rgba.count else { return SIMD3(0.45, 0.45, 0.45) }
+    return SIMD3(
+      Float(frame.rgba[byte]) / 255,
+      Float(frame.rgba[byte + 1]) / 255,
+      Float(frame.rgba[byte + 2]) / 255
+    )
+  }
+
+  private static func addTriangle(
+    _ a: Int32,
+    _ b: Int32,
+    _ c: Int32,
+    positions: [SIMD3<Float>],
+    indices: inout [UInt32],
+    maxEdge: Float
+  ) {
+    guard a >= 0, b >= 0, c >= 0, a != b, b != c, a != c else { return }
+    let pa = positions[Int(a)]
+    let pb = positions[Int(b)]
+    let pc = positions[Int(c)]
+    guard simd_distance(pa, pb) < maxEdge,
+          simd_distance(pb, pc) < maxEdge,
+          simd_distance(pa, pc) < maxEdge else { return }
+    indices.append(UInt32(a))
+    indices.append(UInt32(b))
+    indices.append(UInt32(c))
+  }
+
+  private static func normals(for positions: [SIMD3<Float>], indices: [UInt32]) -> [SIMD3<Float>] {
+    var normals = [SIMD3<Float>](repeating: .zero, count: positions.count)
+    var offset = 0
+    while offset + 2 < indices.count {
+      let a = Int(indices[offset])
+      let b = Int(indices[offset + 1])
+      let c = Int(indices[offset + 2])
+      let face = simd_cross(positions[b] - positions[a], positions[c] - positions[a])
+      normals[a] += face
+      normals[b] += face
+      normals[c] += face
+      offset += 3
+    }
+    return normals.map { Self.finiteNormal($0) }
   }
 
   /// Paints each vertex from the camera frame that saw that surface most directly.

@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:spatial_mesh/bridge/lidar_scan_channel.dart';
 import 'package:spatial_mesh/features/library/scan_library.dart';
+import 'package:spatial_mesh/features/library/scan_viewer_page.dart';
 
-/// Saved scans from Documents/scans, with a share sheet for each file.
+/// Saved scans from Documents/scans, with view, share, and delete for each file.
 class ProjectLibraryPage extends StatefulWidget {
   const ProjectLibraryPage({super.key});
 
@@ -75,6 +76,14 @@ class _ProjectLibraryPageState extends State<ProjectLibraryPage> {
     }
   }
 
+  void _view(SavedScan scan) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => ScanViewerPage(scan: scan),
+      ),
+    );
+  }
+
   Future<void> _share(SavedScan scan) async {
     try {
       await LidarScanChannel.shareScan(scan.path);
@@ -121,21 +130,36 @@ class _ProjectLibraryPageState extends State<ProjectLibraryPage> {
                         ),
                         Align(
                           alignment: Alignment.centerRight,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
+                          child: Wrap(
+                            alignment: WrapAlignment.end,
                             children: [
+                              TextButton.icon(
+                                onPressed: () => _view(scan),
+                                icon: const Icon(Icons.visibility_outlined),
+                                label: const Text('View'),
+                                style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                ),
+                              ),
                               TextButton.icon(
                                 onPressed: () => unawaited(_delete(scan)),
                                 icon: const Icon(Icons.delete_outline),
                                 label: const Text('Delete'),
                                 style: TextButton.styleFrom(
                                   foregroundColor: Theme.of(context).colorScheme.error,
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
                                 ),
                               ),
                               TextButton.icon(
                                 onPressed: () => unawaited(_share(scan)),
                                 icon: const Icon(Icons.ios_share),
                                 label: const Text('Share'),
+                                style: TextButton.styleFrom(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                                ),
                               ),
                             ],
                           ),
@@ -178,7 +202,7 @@ class _EmptyLibrary extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'Tap Done on the Scan tab to save a mesh on this iPhone. Saved scans can be shared or deleted.',
+                'Tap Done on the Scan tab to save a mesh on this iPhone. Saved scans can be viewed, shared, or deleted.',
                 style: Theme.of(context).textTheme.bodyMedium,
                 textAlign: TextAlign.center,
               ),

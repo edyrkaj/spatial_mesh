@@ -22,7 +22,9 @@ enum LiDARCapability {
     if isSupported {
       configuration.sceneReconstruction = .mesh
     }
-    if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+    if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+      configuration.frameSemantics.insert(.smoothedSceneDepth)
+    } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
       configuration.frameSemantics.insert(.sceneDepth)
     }
     configuration.environmentTexturing = .automatic

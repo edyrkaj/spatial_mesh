@@ -48,11 +48,30 @@ final class ScanOverlayControls: UIView {
       : "Mesh anchors: \(count)"
   }
 
-  func updateScanState(isRunning: Bool, isPaused: Bool, canFinish: Bool) {
+  func updateObjectCoverage(shots: Int) {
+    meshCountLabel.numberOfLines = 2
+    meshCountLabel.text = shots == 0
+      ? "✦ Sparkles appear on surfaces as they are captured"
+      : "✦ \(shots) views · sparkles mark what is already covered"
+    meshCountLabel.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
+    UIView.animate(withDuration: 0.35) {
+      self.meshCountLabel.transform = .identity
+    }
+  }
+
+  func showStatus(_ text: String) {
+    statusLabel.numberOfLines = 3
+    statusLabel.text = text
+    statusLabel.textColor = .white
+  }
+
+  func updateScanState(isRunning: Bool, isPaused: Bool, canFinish: Bool, preserveStatus: Bool = false) {
     startButton.isEnabled = !isRunning || isPaused
     pauseButton.isEnabled = isRunning && !isPaused
     resetButton.isEnabled = isRunning || isPaused
     doneButton.isEnabled = canFinish
+    guard !preserveStatus else { return }
+    statusLabel.numberOfLines = 1
     statusLabel.text = {
       if !isRunning && !isPaused { return "Ready to scan" }
       if isPaused { return "Paused" }
@@ -70,6 +89,16 @@ final class ScanOverlayControls: UIView {
     statusLabel.numberOfLines = 2
     statusLabel.text = "Scan completed\n\(fileName)"
     statusLabel.textColor = UIColor(red: 0.55, green: 0.95, blue: 0.7, alpha: 1)
+  }
+
+  /// Drops completion and error copy and returns the controls to a fresh scan.
+  func prepareForNewScan() {
+    statusLabel.numberOfLines = 1
+    statusLabel.textColor = .white
+    trackingLabel.textColor = .white
+    trackingLabel.text = "Waiting for AR session…"
+    updateMeshCount(0)
+    updateScanState(isRunning: false, isPaused: false, canFinish: false)
   }
 
   func clearError() {
