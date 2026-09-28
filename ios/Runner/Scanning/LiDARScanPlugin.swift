@@ -32,6 +32,8 @@ final class LiDARScanPlugin: NSObject, FlutterPlugin, FlutterStreamHandler {
     switch call.method {
     case "isLiDARAvailable":
       result(LiDARCapability.isSupported)
+    case "deviceHardware":
+      result(LiDARCapability.deviceReport())
     case "unsupportedReason":
       result(LiDARCapability.unsupportedReason)
     case "startScan":

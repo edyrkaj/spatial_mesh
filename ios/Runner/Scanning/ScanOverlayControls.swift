@@ -50,11 +50,11 @@ final class ScanOverlayControls: UIView {
       : "Mesh anchors: \(count)"
   }
 
-  func updateObjectCoverage(shots: Int) {
+  func updateObjectCoverage(shots: Int, total: Int) {
     meshCountLabel.numberOfLines = 2
     meshCountLabel.text = shots == 0
       ? "Move to the mark, hold still, then tap Shoot"
-      : "Photo \(min(shots, 16)) of 16"
+      : "Photo \(min(shots, total)) of \(total)"
   }
 
   func showShootButton(_ visible: Bool) {

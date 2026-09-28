@@ -38,6 +38,8 @@ final class ObjectScanDriver: ObservableObject {
 
   var onStatus: ((String, String) -> Void)?
   var onShots: ((Int) -> Void)?
+  /// Called after the photo set is closed, before the model is built.
+  var onCaptureClosed: (() -> Void)?
 
   private var imagesDirectory: URL?
   private var watchers: [Task<Void, Never>] = []
@@ -61,7 +63,7 @@ final class ObjectScanDriver: ObservableObject {
 
     var configuration = ObjectCaptureSession.Configuration()
     configuration.checkpointDirectory = checkpoint
-    configuration.isOverCaptureEnabled = false
+    configuration.isOverCaptureEnabled = true
     session.start(imagesDirectory: images, configuration: configuration)
     if #available(iOS 18.0, *) {
       session.isAutoCaptureEnabled = false
@@ -103,7 +105,7 @@ final class ObjectScanDriver: ObservableObject {
 
   func beginFlippedPass() {
     guard isActive, session.userCompletedScanPass else { return }
-    if shots < 12 {
+    if shots < Self.aroundCount + Self.topCount {
       session.beginNewScanPass()
       passComplete = false
       onStatus?("Raise the phone and look down onto the top", "good")
@@ -130,8 +132,9 @@ final class ObjectScanDriver: ObservableObject {
   func finishAndExport(to directory: URL, basename: String) async throws -> URL {
     guard PhotogrammetrySession.isSupported else { throw ObjectScanError.unsupported }
     let images = try await finishCapture()
+    await MainActor.run { self.onCaptureClosed?() }
     let count = Self.imageCount(in: images)
-    guard count >= 16 else { throw ObjectScanError.notEnoughViews(count) }
+    guard count >= Self.requiredShots else { throw ObjectScanError.notEnoughViews(count) }
 
     let scratch = FileManager.default.temporaryDirectory
       .appendingPathComponent("object_model_\(UUID().uuidString).usdz")
@@ -151,6 +154,7 @@ final class ObjectScanDriver: ObservableObject {
     }
     try FileManager.default.copyItem(at: scratch, to: packaged)
 
+    await MainActor.run { self.onStatus?("Saving…", "good") }
     let output = directory.appendingPathComponent("\(basename).gltf")
     let data = try await Task.detached(priority: .userInitiated) {
       try TexturedModelGLTF.data(fromUSDZ: packaged)
@@ -166,6 +170,7 @@ final class ObjectScanDriver: ObservableObject {
 
   private func finishCapture() async throws -> URL {
     guard let imagesDirectory else { throw ObjectScanError.noModel }
+    isActive = false
     await MainActor.run { session.finish() }
     for _ in 0..<120 {
       let state = await MainActor.run { session.state }
@@ -187,7 +192,7 @@ final class ObjectScanDriver: ObservableObject {
   ) async throws {
     var configuration = PhotogrammetrySession.Configuration()
     configuration.sampleOrdering = .unordered
-    configuration.featureSensitivity = .high
+    configuration.featureSensitivity = .normal
     let session = try PhotogrammetrySession(input: images, configuration: configuration)
     photogrammetry = session
     let request = PhotogrammetrySession.Request.modelFile(url: usdz, detail: detail)
@@ -196,8 +201,8 @@ final class ObjectScanDriver: ObservableObject {
     for try await output in session.outputs {
       switch output {
       case .requestProgress(_, let fraction):
-        let percent = Int((fraction * 100).rounded())
-        let message = "Building the 3D object… \(percent)%"
+        let percent = min(100, Int((fraction * 100).rounded()))
+        let message = percent >= 100 ? "Saving…" : "Building the 3D object… \(percent)%"
         await MainActor.run { self.onStatus?(message, "warn") }
       case .requestError(_, let error):
         throw error
@@ -252,28 +257,40 @@ final class ObjectScanDriver: ObservableObject {
     }
   }
 
-  static let stations = [
-    "Front", "Front-right", "Right", "Back-right",
-    "Back", "Back-left", "Left", "Front-left",
+  static let aroundNames = [
+    "front",
+    "30° to the right",
+    "60° to the right",
+    "the right side",
+    "120°",
+    "150°",
+    "the back",
+    "210°",
+    "240°",
+    "the left side",
+    "300°",
+    "330°",
   ]
+  static let aroundCount = 12
+  static let topCount = 12
+  static let underCount = 12
+  static var requiredShots: Int { aroundCount + topCount + underCount }
 
   static func nextPosition(shots: Int, passComplete: Bool) -> String {
-    switch shots {
-    case 0: return "Next: Front. Hold the camera at the middle of the object"
-    case 1: return "Next: Front-right. Stay level and step sideways"
-    case 2: return "Next: Right side"
-    case 3: return "Next: Back-right"
-    case 4: return "Next: Back"
-    case 5: return "Next: Back-left"
-    case 6: return "Next: Left side"
-    case 7: return "Next: Front-left. Finish the circle"
-    case 8...11: return "Raise the phone and look down onto the top"
-    case 12...15: return "Tip the object so the underside faces the camera, then shoot"
-    default:
-      return passComplete
-        ? "Top and underside are in. Tap Done"
-        : "All the way around, top, and underside. Tap Done"
+    if shots < aroundCount {
+      return "Around, \(aroundNames[shots]). Stay level, move, then tap Shoot."
     }
+    if shots < aroundCount + topCount {
+      let step = shots - aroundCount + 1
+      return "Top \(step) of \(topCount). Raise the phone and look down, then tap Shoot."
+    }
+    if shots < requiredShots {
+      let step = shots - aroundCount - topCount + 1
+      return "Under \(step) of \(underCount). Tip the object so the bottom faces you, then tap Shoot."
+    }
+    return passComplete
+      ? "All \(requiredShots) photos are in. Tap Done"
+      : "Around, top, and underside are in. Tap Done"
   }
 
   private static func coaching(_ session: ObjectCaptureSession, shots: Int, passComplete: Bool) -> String {
@@ -291,6 +308,15 @@ final class ObjectScanDriver: ObservableObject {
       return nextPosition(shots: shots, passComplete: passComplete)
     }
     return ""
+  }
+
+  static func readable(_ error: Error) -> String {
+    let nsError = error as NSError
+    let domain = nsError.domain
+    if nsError.code == 6, domain.contains("Photogrammetry") || domain.contains("CoreOC") {
+      return "Those photos could not be built into a 3D model. Each shot has to overlap the last one. Walk the ring, raise the phone for the top, then tip the object so the underside faces the camera."
+    }
+    return error.localizedDescription
   }
 
   private static func imageCount(in folder: URL) -> Int {
@@ -312,11 +338,12 @@ final class ObjectScanDriver: ObservableObject {
 
 @available(iOS 17.0, *)
 struct ObjectScanCamera: View {
+  let session: ObjectCaptureSession
   @ObservedObject var driver: ObjectScanDriver
 
   var body: some View {
     ZStack(alignment: .bottomLeading) {
-      FixedObjectCapture(session: driver.session)
+      StableCaptureLayer(session: session)
         .ignoresSafeArea()
       OrbitStoryboard(shots: driver.shots, passComplete: driver.passComplete)
         .padding(.leading, 12)
@@ -326,19 +353,35 @@ struct ObjectScanCamera: View {
   }
 }
 
-/// Builds the capture view once. Rebuilding it after the session ends crashes with
-/// "Cannot make a view for a deinitialized ObjectCaptureSession".
+/// Camera plus the captured point cloud. Created once for this session so SwiftUI
+/// does not build either view again after the session is released.
 @available(iOS 17.0, *)
-private struct FixedObjectCapture: UIViewControllerRepresentable {
+private struct StableCaptureLayer: UIViewControllerRepresentable {
   let session: ObjectCaptureSession
 
-  func makeUIViewController(context: Context) -> UIHostingController<ObjectCaptureView<EmptyView>> {
-    let host = UIHostingController(rootView: ObjectCaptureView(session: session))
-    host.view.backgroundColor = .black
+  func makeUIViewController(context: Context) -> UIHostingController<CapturePointsOnCamera> {
+    let host = UIHostingController(rootView: CapturePointsOnCamera(session: session))
+    host.view.backgroundColor = .clear
     return host
   }
 
-  func updateUIViewController(_ controller: UIHostingController<ObjectCaptureView<EmptyView>>, context: Context) {}
+  func updateUIViewController(
+    _ controller: UIHostingController<CapturePointsOnCamera>,
+    context: Context
+  ) {}
+}
+
+@available(iOS 17.0, *)
+private struct CapturePointsOnCamera: View {
+  let session: ObjectCaptureSession
+
+  var body: some View {
+    ZStack {
+      ObjectCaptureView(session: session)
+      ObjectCapturePointCloudView(session: session)
+        .allowsHitTesting(false)
+    }
+  }
 }
 
 /// Photo plan over the live camera: a circle around the object, then the top, then the underside.
@@ -347,7 +390,10 @@ private struct OrbitStoryboard: View {
   let shots: Int
   let passComplete: Bool
 
-  private let names = ObjectScanDriver.stations
+  private let names = ObjectScanDriver.aroundNames
+  private let around = ObjectScanDriver.aroundCount
+  private let topEnd = ObjectScanDriver.aroundCount + ObjectScanDriver.topCount
+  private let total = ObjectScanDriver.requiredShots
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
@@ -363,9 +409,9 @@ private struct OrbitStoryboard: View {
         ForEach(names.indices, id: \.self) { index in
           ringStop(index)
         }
-        pole(title: "Top", symbol: "arrow.down.to.line", done: shots >= 12, isNext: shots >= 8 && shots < 12)
+        pole(title: "Top", symbol: "arrow.down.to.line", done: shots >= topEnd, isNext: shots >= around && shots < topEnd)
           .offset(y: -74)
-        pole(title: "Under", symbol: "rotate.3d", done: shots >= 16, isNext: shots >= 12 && shots < 16)
+        pole(title: "Under", symbol: "rotate.3d", done: shots >= total, isNext: shots >= topEnd && shots < total)
           .offset(y: 74)
         Image(systemName: "cube")
           .font(.caption)

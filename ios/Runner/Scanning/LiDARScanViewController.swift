@@ -112,9 +112,7 @@ final class LiDARScanViewController: UIViewController {
     objectBuild?.cancel()
     objectBuild = nil
     if #available(iOS 17.0, *) {
-      removeObjectCamera()
-      objectDriver?.cancel()
-      objectDriver = nil
+      retireObjectCapture()
     }
     objectPhase = .idle
     arView.isHidden = false
@@ -315,16 +313,19 @@ private extension LiDARScanViewController {
   func beginObjectDetecting() {
     arView.session.pause()
     arView.isHidden = true
-    removeObjectCamera()
+    detachObjectCamera()
     let driver = ObjectScanDriver()
     driver.onStatus = { [weak self] message, level in
       self?.overlay.showStatus(message)
       self?.overlay.updateTracking(message, level: level)
       self?.emit(["type": "tracking", "message": message, "level": level])
     }
+    driver.onCaptureClosed = { [weak self] in
+      self?.detachObjectCamera()
+    }
     driver.onShots = { [weak self] shots in
       guard let self else { return }
-      self.overlay.updateObjectCoverage(shots: shots)
+      self.overlay.updateObjectCoverage(shots: shots, total: ObjectScanDriver.requiredShots)
       self.refreshObjectControls(shots: shots)
       self.emit(["type": "meshCount", "count": shots])
     }
@@ -359,7 +360,7 @@ private extension LiDARScanViewController {
 
   func finishObjectScan() {
     guard let driver = objectDriver else { return }
-    guard driver.shots >= 16 else {
+    guard driver.shots >= ObjectScanDriver.requiredShots else {
       let message = ObjectScanError.notEnoughViews(driver.shots).localizedDescription
       overlay.showError(message)
       emit(["type": "error", "code": "NEED_ORBIT", "message": message])
@@ -367,7 +368,6 @@ private extension LiDARScanViewController {
     }
     isFinishing = true
     objectPhase = .building
-    removeObjectCamera()
     let epoch = scanEpoch
     overlay.showStatus("Building the 3D object…")
     overlay.updateTracking("Photogrammetry is turning the orbit into a textured mesh. This can take a few minutes.", level: "warn")
@@ -383,22 +383,32 @@ private extension LiDARScanViewController {
       } catch {
         await MainActor.run {
           guard self.scanEpoch == epoch else { return }
-          self.failScan(message: error.localizedDescription, epoch: epoch)
+          self.failScan(message: ObjectScanDriver.readable(error), epoch: epoch)
         }
       }
     }
   }
 
-  func removeObjectCamera() {
-    objectHost?.willMove(toParent: nil)
-    objectHost?.view.removeFromSuperview()
-    objectHost?.removeFromParent()
+  func detachObjectCamera() {
+    let host = objectHost
     objectHost = nil
+    host?.willMove(toParent: nil)
+    host?.view.removeFromSuperview()
+    host?.removeFromParent()
+  }
+
+  func retireObjectCapture() {
+    detachObjectCamera()
+    let driver = objectDriver
+    objectDriver = nil
+    DispatchQueue.main.async {
+      driver?.cancel()
+    }
   }
 
   func installObjectCamera(_ driver: ObjectScanDriver) {
-    removeObjectCamera()
-    let host = UIHostingController(rootView: ObjectScanCamera(driver: driver))
+    detachObjectCamera()
+    let host = UIHostingController(rootView: ObjectScanCamera(session: driver.session, driver: driver))
     host.view.backgroundColor = .black
     host.view.frame = view.bounds
     host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -409,20 +419,16 @@ private extension LiDARScanViewController {
   }
 
   func completeScan(path: String, epoch: Int) {
+    guard scanEpoch == epoch else { return }
     isFinishing = false
     objectPhase = .idle
     isRunning = false
     isPaused = false
     eventDelegate?.scanController(self, didFinishWithPath: path, error: nil)
-    guard scanEpoch == epoch else { return }
-    let name = URL(fileURLWithPath: path).lastPathComponent
-    overlay.showCompleted(fileName: name)
-    overlay.updateObjectCoverage(shots: objectDriver?.shots ?? 0)
-    emit([
-      "type": "exportComplete",
-      "path": path,
-      "format": "gltf",
-    ])
+    retireObjectCapture()
+    arView.isHidden = false
+    overlay.prepareForNewScan()
+    emit(["type": "meshCount", "count": 0])
   }
 
   func failScan(message: String, epoch: Int) {
@@ -442,7 +448,7 @@ private extension LiDARScanViewController {
     overlay.updateScanState(
       isRunning: isRunning,
       isPaused: isPaused,
-      canFinish: count >= 16 && !isFinishing && objectPhase == .capturing,
+      canFinish: count >= ObjectScanDriver.requiredShots && !isFinishing && objectPhase == .capturing,
       preserveStatus: true
     )
     overlay.showShootButton(objectPhase == .capturing && !isFinishing && !isPaused)

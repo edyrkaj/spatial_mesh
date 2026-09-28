@@ -177,6 +177,31 @@ enum ScanMeshScene {
         )
       }
     }
+    if let uvIndex = intValue(attributes["TEXCOORD_0"]) {
+      let uvs = try packed(
+        accessor: accessor(accessors, uvIndex),
+        views: bufferViews,
+        in: blob,
+        componentType: 5126,
+        type: "VEC2",
+        components: 2,
+        bytes: 4
+      )
+      if !uvs.isEmpty {
+        sources.append(
+          SCNGeometrySource(
+            data: uvs,
+            semantic: .texcoord,
+            vectorCount: uvs.count / 8,
+            usesFloatComponents: true,
+            componentsPerVector: 2,
+            bytesPerComponent: 4,
+            dataOffset: 0,
+            dataStride: 8
+          )
+        )
+      }
+    }
 
     guard let indicesIndex = intValue(primitive["indices"]) else {
       throw ScanMeshLoadError.invalid("This scan has no mesh to show.")
@@ -203,11 +228,37 @@ enum ScanMeshScene {
     let material = SCNMaterial()
     material.lightingModel = .constant
     material.isDoubleSided = true
-    material.diffuse.contents = hasColors
-      ? UIColor.white
-      : UIColor(red: 0.35, green: 0.85, blue: 0.95, alpha: 1)
+    if let image = baseColorImage(in: root) {
+      material.diffuse.contents = image
+      material.diffuse.contentsTransform = SCNMatrix4Translate(SCNMatrix4MakeScale(1, -1, 1), 0, 1, 0)
+      material.diffuse.wrapS = .clamp
+      material.diffuse.wrapT = .clamp
+    } else {
+      material.diffuse.contents = hasColors
+        ? UIColor.white
+        : UIColor(red: 0.35, green: 0.85, blue: 0.95, alpha: 1)
+    }
     geometry.materials = [material]
     return geometry
+  }
+
+  /// The photogrammetry glTF stores the photo as a data-URI image, not as vertex colors.
+  private static func baseColorImage(in root: [String: Any]) -> UIImage? {
+    let materials = dictionaries(root["materials"])
+    let pbr = dictionary(materials.first?["pbrMetallicRoughness"])
+    let textureRef = dictionary(pbr?["baseColorTexture"])
+    guard let textureIndex = intValue(textureRef?["index"]) else { return nil }
+    let textures = dictionaries(root["textures"])
+    guard textures.indices.contains(textureIndex) else { return nil }
+    guard let sourceIndex = intValue(textures[textureIndex]["source"]) else { return nil }
+    let images = dictionaries(root["images"])
+    guard images.indices.contains(sourceIndex), let uri = images[sourceIndex]["uri"] as? String else {
+      return nil
+    }
+    guard let marker = uri.range(of: "base64,") else { return nil }
+    let payload = String(uri[marker.upperBound...])
+    guard let data = Data(base64Encoded: payload, options: .ignoreUnknownCharacters) else { return nil }
+    return UIImage(data: data)
   }
 
   private static func decodeFirstBuffer(_ buffers: [[String: Any]]) throws -> Data? {

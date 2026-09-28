@@ -26,6 +26,24 @@ class LidarScanChannel {
     return method.invokeMethod<String>('unsupportedReason');
   }
 
+  static Future<Map<String, dynamic>> deviceHardware() async {
+    if (!isIos) {
+      return const {
+        'name': 'Not an iPhone or iPad',
+        'machine': '',
+        'systemName': '',
+        'systemVersion': '',
+        'lidar': false,
+        'sceneDepth': false,
+        'objectCapture': false,
+        'photogrammetry': false,
+      };
+    }
+    final raw = await method.invokeMethod<dynamic>('deviceHardware');
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return const {};
+  }
+
   static Future<void> startScan() => method.invokeMethod<void>('startScan');
 
   static Future<void> pauseScan() => method.invokeMethod<void>('pauseScan');
