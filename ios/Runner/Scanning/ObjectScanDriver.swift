@@ -17,7 +17,7 @@ enum ObjectScanError: LocalizedError {
     case .unsupported:
       return "This iPhone cannot build an object model on device. Use iPhone 12 Pro or newer on iOS 17."
     case .notEnoughViews(let count):
-      return "Keep orbiting the object. \(count) photos so far — sparkles should cover every side before Done."
+      return "Keep going around the object, then the top, then the underside. \(count) photos so far."
     case .noModel:
       return "Could not build the object. Orbit it again in steady light, with a plain background."
     case .cancelled:
@@ -32,7 +32,8 @@ enum ObjectScanError: LocalizedError {
 @MainActor
 final class ObjectScanDriver: ObservableObject {
   @Published private(set) var session = ObjectCaptureSession()
-  private(set) var shots = 0
+  @Published private(set) var shots = 0
+  @Published private(set) var passComplete = false
   private(set) var isActive = false
 
   var onStatus: ((String, String) -> Void)?
@@ -51,19 +52,22 @@ final class ObjectScanDriver: ObservableObject {
     try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
     try FileManager.default.createDirectory(at: checkpoint, withIntermediateDirectories: true)
 
-    let next = ObjectCaptureSession()
     imagesDirectory = images
     didStartCapturing = false
     shots = 0
+    passComplete = false
     isActive = true
-    session = next
-    observe(next)
+    observe(session)
 
     var configuration = ObjectCaptureSession.Configuration()
     configuration.checkpointDirectory = checkpoint
     configuration.isOverCaptureEnabled = true
-    next.start(imagesDirectory: images, configuration: configuration)
-    next.startDetecting()
+    session.start(imagesDirectory: images, configuration: configuration)
+    if #available(iOS 18.0, *) {
+      session.isAutoCaptureEnabled = true
+      session.shouldPlayHaptics = true
+    }
+    session.startDetecting()
     onShots?(0)
     onStatus?("Center the object in the box, then tap Start", "warn")
   }
@@ -72,7 +76,7 @@ final class ObjectScanDriver: ObservableObject {
     guard isActive, !didStartCapturing else { return }
     didStartCapturing = true
     session.startCapturing()
-    onStatus?("Orbit slowly. Sparkles in Covered show the scanned surface", "good")
+    onStatus?("Follow the ring: around, then top, then tip the object for the underside", "good")
   }
 
   func pause() {
@@ -84,11 +88,26 @@ final class ObjectScanDriver: ObservableObject {
   func resume() {
     guard session.isPaused else { return }
     session.resume()
-    onStatus?("Orbit slowly. Sparkles in Covered show the scanned surface", "good")
+    onStatus?(Self.nextPosition(shots: shots, passComplete: passComplete), "good")
+  }
+
+  func beginFlippedPass() {
+    guard isActive, session.userCompletedScanPass else { return }
+    if shots < 12 {
+      session.beginNewScanPass()
+      passComplete = false
+      onStatus?("Raise the phone and look down onto the top", "good")
+    } else {
+      session.beginNewScanPassAfterFlip()
+      passComplete = false
+      onStatus?("Tip the object so the underside faces the camera", "good")
+    }
   }
 
   func cancel() {
     isActive = false
+    watchers.forEach { $0.cancel() }
+    watchers = []
     photogrammetry?.cancel()
     photogrammetry = nil
     session.cancel()
@@ -102,7 +121,7 @@ final class ObjectScanDriver: ObservableObject {
     guard PhotogrammetrySession.isSupported else { throw ObjectScanError.unsupported }
     let images = try await finishCapture()
     let count = Self.imageCount(in: images)
-    guard count >= 12 else { throw ObjectScanError.notEnoughViews(count) }
+    guard count >= 16 else { throw ObjectScanError.notEnoughViews(count) }
 
     let scratch = FileManager.default.temporaryDirectory
       .appendingPathComponent("object_model_\(UUID().uuidString).usdz")
@@ -212,20 +231,45 @@ final class ObjectScanDriver: ObservableObject {
       onShots?(shots)
     }
     guard isActive else { return }
+    passComplete = session.userCompletedScanPass
     if case .failed(let error) = session.state {
       onStatus?(error.localizedDescription, "bad")
       return
     }
-    let message = Self.coaching(session)
+    let message = Self.coaching(session, shots: shots, passComplete: passComplete)
     if !message.isEmpty {
       onStatus?(message, "good")
     }
   }
 
-  private static func coaching(_ session: ObjectCaptureSession) -> String {
+  static let stations = [
+    "Front", "Front-right", "Right", "Back-right",
+    "Back", "Back-left", "Left", "Front-left",
+  ]
+
+  static func nextPosition(shots: Int, passComplete: Bool) -> String {
+    switch shots {
+    case 0: return "Next: Front. Hold the camera at the middle of the object"
+    case 1: return "Next: Front-right. Stay level and step sideways"
+    case 2: return "Next: Right side"
+    case 3: return "Next: Back-right"
+    case 4: return "Next: Back"
+    case 5: return "Next: Back-left"
+    case 6: return "Next: Left side"
+    case 7: return "Next: Front-left. Finish the circle"
+    case 8...11: return "Raise the phone and look down onto the top"
+    case 12...15: return "Tip the object so the underside faces the camera, then shoot"
+    default:
+      return passComplete
+        ? "Top and underside are in. Tap Done"
+        : "All the way around, top, and underside. Tap Done"
+    }
+  }
+
+  private static func coaching(_ session: ObjectCaptureSession, shots: Int, passComplete: Bool) -> String {
     let feedback = session.feedback
     if feedback.contains(.movingTooFast) {
-      return "Slow down so the sparkles can settle on the surface"
+      return "Slow down, then move to the next mark on the ring"
     }
     if feedback.contains(.objectTooFar) { return "Move closer to the object" }
     if feedback.contains(.objectTooClose) { return "Step back so the whole object fits" }
@@ -233,8 +277,8 @@ final class ObjectScanDriver: ObservableObject {
       return "More light will make the real texture sharper"
     }
     if feedback.contains(.outOfFieldOfView) { return "Keep the object inside the frame" }
-    if session.userCompletedScanPass {
-      return "This side is covered in sparkles. Tap Done, or keep going for the back"
+    if session.state == .capturing {
+      return nextPosition(shots: shots, passComplete: passComplete)
     }
     return ""
   }
@@ -261,36 +305,89 @@ struct ObjectScanCamera: View {
   @ObservedObject var driver: ObjectScanDriver
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
-      ObjectCaptureView(session: driver.session)
-        .ignoresSafeArea()
-      VStack(alignment: .trailing, spacing: 6) {
-        Text("Covered")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.white)
-          .shadow(radius: 2)
-        coverage
-          .frame(width: 156, height: 156)
-          .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-              .stroke(.white.opacity(0.7), lineWidth: 1)
-          }
+    ZStack {
+      if driver.isActive {
+        ObjectCaptureView(session: driver.session)
+          .ignoresSafeArea()
+      } else {
+        Color.black.ignoresSafeArea()
       }
-      .padding(.top, 12)
-      .padding(.trailing, 12)
-      .allowsHitTesting(false)
+      OrbitStoryboard(shots: driver.shots, passComplete: driver.passComplete)
+        .padding(.leading, 12)
+        .padding(.bottom, 210)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .allowsHitTesting(false)
+    }
+  }
+}
+
+/// Photo plan over the live camera: a circle around the object, then the top, then the underside.
+@available(iOS 17.0, *)
+private struct OrbitStoryboard: View {
+  let shots: Int
+  let passComplete: Bool
+
+  private let names = ObjectScanDriver.stations
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(ObjectScanDriver.nextPosition(shots: shots, passComplete: passComplete))
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.white)
+        .lineLimit(3)
+        .frame(width: 200, alignment: .leading)
+      ZStack {
+        Circle()
+          .stroke(.white.opacity(0.35), lineWidth: 2)
+          .frame(width: 112, height: 112)
+        ForEach(names.indices, id: \.self) { index in
+          ringStop(index)
+        }
+        pole(title: "Top", symbol: "arrow.down.to.line", done: shots >= 12, isNext: shots >= 8 && shots < 12)
+          .offset(y: -74)
+        pole(title: "Under", symbol: "rotate.3d", done: shots >= 16, isNext: shots >= 12 && shots < 16)
+          .offset(y: 74)
+        Image(systemName: "cube")
+          .font(.caption)
+          .foregroundStyle(.white.opacity(0.9))
+      }
+      .frame(width: 200, height: 190)
+    }
+    .padding(10)
+    .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+  }
+
+  private func ringStop(_ index: Int) -> some View {
+    let done = shots > index
+    let isNext = shots < names.count && index == shots
+    let angle = (Double(index) / Double(names.count)) * 2 * Double.pi - Double.pi / 2
+    let radius = 50.0
+    return marker(done: done, isNext: isNext, symbol: "camera.fill")
+      .offset(x: CGFloat(cos(angle) * radius), y: CGFloat(sin(angle) * radius))
+  }
+
+  private func pole(title: String, symbol: String, done: Bool, isNext: Bool) -> some View {
+    VStack(spacing: 2) {
+      marker(done: done, isNext: isNext, symbol: symbol)
+      Text(title)
+        .font(.system(size: 9, weight: .semibold))
+        .foregroundStyle(.white)
     }
   }
 
-  @ViewBuilder
-  private var coverage: some View {
-    if #available(iOS 18.0, *) {
-      ObjectCapturePointCloudView(session: driver.session)
-        .showShotLocations(true)
-    } else {
-      ObjectCapturePointCloudView(session: driver.session)
-    }
+  private func marker(done: Bool, isNext: Bool, symbol: String) -> some View {
+    Circle()
+      .fill(done ? Color(red: 0.35, green: 0.95, blue: 0.85) : Color.white.opacity(isNext ? 0.95 : 0.28))
+      .frame(width: isNext ? 20 : 14, height: isNext ? 20 : 14)
+      .overlay {
+        if isNext {
+          Image(systemName: symbol)
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(.black)
+        }
+      }
+      .scaleEffect(isNext ? 1.12 : 1)
+      .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: isNext)
   }
 }
 

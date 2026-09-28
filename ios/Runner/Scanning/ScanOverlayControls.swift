@@ -51,8 +51,8 @@ final class ScanOverlayControls: UIView {
   func updateObjectCoverage(shots: Int) {
     meshCountLabel.numberOfLines = 2
     meshCountLabel.text = shots == 0
-      ? "✦ Sparkles appear on surfaces as they are captured"
-      : "✦ \(shots) views · sparkles mark what is already covered"
+      ? "Ring, then top, then tip the object for the underside"
+      : "Photo \(shots) of 16 · follow the next mark"
     meshCountLabel.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
     UIView.animate(withDuration: 0.35) {
       self.meshCountLabel.transform = .identity

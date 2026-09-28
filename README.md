@@ -22,7 +22,7 @@ flutter run -d <your-device-id> --release
 
 Or open `ios/Runner.xcworkspace` / `ios/Runner.xcodeproj` in Xcode, select your team for signing, and run on the device.
 
-Done saves a textured `.gltf` of one object. On iOS 17, tap **Start**, fit the box, tap **Start** again, and orbit until sparkles cover the surface. The saved model is a photogrammetry mesh, not the coarse room shape.
+Done saves a textured `.gltf` of one object. Fit the box, walk the ring, raise the phone for the top, then tip the object so the underside faces the camera.
 
 ## Export formats
 
