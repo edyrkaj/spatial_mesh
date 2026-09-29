@@ -1,11 +1,17 @@
 import UIKit
 
+enum ScanSubject {
+  case object
+  case room
+}
+
 protocol ScanOverlayControlsDelegate: AnyObject {
   func overlayDidTapStart()
   func overlayDidTapPause()
   func overlayDidTapReset()
   func overlayDidTapDone()
   func overlayDidTapShoot()
+  func overlayDidSelectSubject(_ subject: ScanSubject)
 }
 
 /// Native overlay for Start / Pause / Reset / Done + tracking feedback.
@@ -20,6 +26,7 @@ final class ScanOverlayControls: UIView {
   private let resetButton = UIButton(type: .system)
   private let doneButton = UIButton(type: .system)
   private let shootButton = UIButton(type: .system)
+  private let subjectControl = UISegmentedControl(items: ["Object", "Room"])
   private let stack = UIStackView()
 
   override init(frame: CGRect) {
@@ -45,16 +52,22 @@ final class ScanOverlayControls: UIView {
   }
 
   func updateMeshCount(_ count: Int) {
+    meshCountLabel.numberOfLines = 2
     meshCountLabel.text = count == 0
-      ? "No mesh yet — point at nearby surfaces"
-      : "Mesh anchors: \(count)"
+      ? "Aim at walls, floor, and furniture. The mesh is what you scanned."
+      : "Surfaces scanned: \(count). Keep aiming at what you want in the model."
   }
 
-  func updateObjectCoverage(shots: Int, total: Int) {
+  func setSubject(_ subject: ScanSubject, locked: Bool) {
+    subjectControl.selectedSegmentIndex = subject == .object ? 0 : 1
+    subjectControl.isEnabled = !locked
+  }
+
+  func updateObjectCoverage(shots: Int) {
     meshCountLabel.numberOfLines = 2
     meshCountLabel.text = shots == 0
-      ? "Move to the mark, hold still, then tap Shoot"
-      : "Photo \(min(shots, total)) of \(total)"
+      ? "Fit the object in the box, then walk. Green glitter shows what is scanned."
+      : "Photos \(shots) · more makes a sharper model"
   }
 
   func showShootButton(_ visible: Bool) {
@@ -131,6 +144,11 @@ final class ScanOverlayControls: UIView {
     configure(doneButton, title: "Done", action: #selector(doneTapped), prominent: true)
     configure(shootButton, title: "Shoot", action: #selector(shootTapped), prominent: true)
     shootButton.isHidden = true
+    subjectControl.selectedSegmentIndex = 1
+    subjectControl.selectedSegmentTintColor = UIColor(red: 0.2, green: 0.65, blue: 0.85, alpha: 1)
+    subjectControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .normal)
+    subjectControl.setTitleTextAttributes([.foregroundColor: UIColor.white], for: .selected)
+    subjectControl.addTarget(self, action: #selector(subjectChanged), for: .valueChanged)
 
     let buttons = UIStackView(arrangedSubviews: [startButton, pauseButton, resetButton, doneButton])
     buttons.axis = .horizontal
@@ -140,6 +158,7 @@ final class ScanOverlayControls: UIView {
     stack.axis = .vertical
     stack.spacing = 8
     stack.translatesAutoresizingMaskIntoConstraints = false
+    stack.addArrangedSubview(subjectControl)
     stack.addArrangedSubview(statusLabel)
     stack.addArrangedSubview(trackingLabel)
     stack.addArrangedSubview(meshCountLabel)
@@ -184,4 +203,9 @@ final class ScanOverlayControls: UIView {
   @objc private func resetTapped() { delegate?.overlayDidTapReset() }
   @objc private func doneTapped() { delegate?.overlayDidTapDone() }
   @objc private func shootTapped() { delegate?.overlayDidTapShoot() }
+
+  @objc private func subjectChanged() {
+    let subject: ScanSubject = subjectControl.selectedSegmentIndex == 0 ? .object : .room
+    delegate?.overlayDidSelectSubject(subject)
+  }
 }

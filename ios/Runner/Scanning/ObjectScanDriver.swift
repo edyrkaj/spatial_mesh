@@ -8,7 +8,7 @@ import zlib
 
 enum ObjectScanError: LocalizedError {
   case unsupported
-  case notEnoughViews(Int)
+  case notEnoughViews
   case noModel
   case cancelled
 
@@ -16,8 +16,8 @@ enum ObjectScanError: LocalizedError {
     switch self {
     case .unsupported:
       return "This iPhone cannot build an object model on device. Use iPhone 12 Pro or newer on iOS 17."
-    case .notEnoughViews(let count):
-      return "Keep going around the object, then the top, then the underside. \(count) photos so far."
+    case .notEnoughViews:
+      return "Walk around the object a little so there is at least one photo, then tap Done."
     case .noModel:
       return "Could not build the object. Orbit it again in steady light, with a plain background."
     case .cancelled:
@@ -33,7 +33,9 @@ enum ObjectScanError: LocalizedError {
 final class ObjectScanDriver: ObservableObject {
   @Published private(set) var session = ObjectCaptureSession()
   @Published private(set) var shots = 0
+  @Published private(set) var guidePhase = 0
   @Published private(set) var passComplete = false
+  private var awaitingNextPass = false
   private(set) var isActive = false
 
   var onStatus: ((String, String) -> Void)?
@@ -58,6 +60,8 @@ final class ObjectScanDriver: ObservableObject {
     didStartCapturing = false
     shots = 0
     passComplete = false
+    guidePhase = 0
+    awaitingNextPass = false
     isActive = true
     observe(session)
 
@@ -66,7 +70,7 @@ final class ObjectScanDriver: ObservableObject {
     configuration.isOverCaptureEnabled = true
     session.start(imagesDirectory: images, configuration: configuration)
     if #available(iOS 18.0, *) {
-      session.isAutoCaptureEnabled = false
+      session.isAutoCaptureEnabled = true
       session.shouldPlayHaptics = true
     }
     session.startDetecting()
@@ -87,8 +91,9 @@ final class ObjectScanDriver: ObservableObject {
   func beginCapturing() {
     guard isActive, !didStartCapturing else { return }
     didStartCapturing = true
+    guidePhase = 1
     session.startCapturing()
-    onStatus?(Self.nextPosition(shots: 0, passComplete: false), "good")
+    onStatus?("Move so each photo overlaps the last one. Green glitter marks what is already scanned.", "good")
   }
 
   func pause() {
@@ -100,20 +105,16 @@ final class ObjectScanDriver: ObservableObject {
   func resume() {
     guard session.isPaused else { return }
     session.resume()
-    onStatus?(Self.nextPosition(shots: shots, passComplete: passComplete), "good")
+    onStatus?("Keep moving. Green glitter shows the parts already scanned.", "good")
   }
 
-  func beginFlippedPass() {
+  /// Keeps capturing the same object. A new pass continues from the photos already taken
+  /// and does not require lifting the object or looking at its underside.
+  func continueCapturing() {
     guard isActive, session.userCompletedScanPass else { return }
-    if shots < Self.aroundCount + Self.topCount {
-      session.beginNewScanPass()
-      passComplete = false
-      onStatus?("Raise the phone and look down onto the top", "good")
-    } else {
-      session.beginNewScanPassAfterFlip()
-      passComplete = false
-      onStatus?("Tip the object so the underside faces the camera", "good")
-    }
+    session.beginNewScanPass()
+    passComplete = false
+    onStatus?("Keep covering the sides you can reach. Tap Done to build from these photos.", "good")
   }
 
   func cancel() {
@@ -134,7 +135,7 @@ final class ObjectScanDriver: ObservableObject {
     let images = try await finishCapture()
     await MainActor.run { self.onCaptureClosed?() }
     let count = Self.imageCount(in: images)
-    guard count >= Self.requiredShots else { throw ObjectScanError.notEnoughViews(count) }
+    guard count > 0 else { throw ObjectScanError.notEnoughViews }
 
     let scratch = FileManager.default.temporaryDirectory
       .appendingPathComponent("object_model_\(UUID().uuidString).usdz")
@@ -246,15 +247,29 @@ final class ObjectScanDriver: ObservableObject {
       onShots?(shots)
     }
     guard isActive else { return }
-    passComplete = session.userCompletedScanPass
+    let passDone = session.userCompletedScanPass
+    passComplete = passDone
+    if passDone, !awaitingNextPass {
+      awaitingNextPass = true
+      advanceGuide()
+    } else if !passDone {
+      awaitingNextPass = false
+    }
     if case .failed(let error) = session.state {
       onStatus?(error.localizedDescription, "bad")
       return
     }
-    let message = Self.coaching(session, shots: shots, passComplete: passComplete)
+    let message = Self.coaching(session, guidePhase: guidePhase)
     if !message.isEmpty {
       onStatus?(message, "good")
     }
+  }
+
+  private func advanceGuide() {
+    guidePhase = 1
+    session.beginNewScanPass()
+    passComplete = false
+    onStatus?("Keep moving so each view overlaps the last. Cover what you can reach, then tap Done.", "good")
   }
 
   static let aroundNames = [
@@ -293,10 +308,10 @@ final class ObjectScanDriver: ObservableObject {
       : "Around, top, and underside are in. Tap Done"
   }
 
-  private static func coaching(_ session: ObjectCaptureSession, shots: Int, passComplete: Bool) -> String {
+  private static func coaching(_ session: ObjectCaptureSession, guidePhase: Int) -> String {
     let feedback = session.feedback
     if feedback.contains(.movingTooFast) {
-      return "Slow down, then move to the next mark on the ring"
+      return "Slow down. Keep the object in frame and overlap the green glitter."
     }
     if feedback.contains(.objectTooFar) { return "Move closer to the object" }
     if feedback.contains(.objectTooClose) { return "Step back so the whole object fits" }
@@ -305,7 +320,7 @@ final class ObjectScanDriver: ObservableObject {
     }
     if feedback.contains(.outOfFieldOfView) { return "Keep the object inside the frame" }
     if session.state == .capturing {
-      return nextPosition(shots: shots, passComplete: passComplete)
+      return "Move so the next photo overlaps the green glitter. Cover the sides you can reach, then tap Done."
     }
     return ""
   }
@@ -314,7 +329,7 @@ final class ObjectScanDriver: ObservableObject {
     let nsError = error as NSError
     let domain = nsError.domain
     if nsError.code == 6, domain.contains("Photogrammetry") || domain.contains("CoreOC") {
-      return "Those photos could not be built into a 3D model. Each shot has to overlap the last one. Walk the ring, raise the phone for the top, then tip the object so the underside faces the camera."
+      return "These photos do not overlap enough to build a model. Move slowly so each view shares part of the last one. For a room or a large piece, tap Reset and choose Room. Room builds the 3D from the LiDAR of the surfaces you scanned."
     }
     return error.localizedDescription
   }
@@ -345,7 +360,7 @@ struct ObjectScanCamera: View {
     ZStack(alignment: .bottomLeading) {
       StableCaptureLayer(session: session)
         .ignoresSafeArea()
-      OrbitStoryboard(shots: driver.shots, passComplete: driver.passComplete)
+      OrbitStoryboard(shots: driver.shots, guidePhase: driver.guidePhase)
         .padding(.leading, 12)
         .padding(.bottom, 230)
         .allowsHitTesting(false)
@@ -353,51 +368,79 @@ struct ObjectScanCamera: View {
   }
 }
 
-/// Camera plus the captured point cloud. Created once for this session so SwiftUI
-/// does not build either view again after the session is released.
+/// Camera plus a glittering point cloud on the surfaces already photographed.
+/// Both capture views are created once, so they are not built again after the session ends.
 @available(iOS 17.0, *)
 private struct StableCaptureLayer: UIViewControllerRepresentable {
   let session: ObjectCaptureSession
 
-  func makeUIViewController(context: Context) -> UIHostingController<CapturePointsOnCamera> {
-    let host = UIHostingController(rootView: CapturePointsOnCamera(session: session))
-    host.view.backgroundColor = .clear
-    return host
+  func makeUIViewController(context: Context) -> CaptureContainerController {
+    CaptureContainerController(session: session)
   }
 
-  func updateUIViewController(
-    _ controller: UIHostingController<CapturePointsOnCamera>,
-    context: Context
-  ) {}
+  func updateUIViewController(_ controller: CaptureContainerController, context: Context) {}
 }
 
 @available(iOS 17.0, *)
-private struct CapturePointsOnCamera: View {
-  let session: ObjectCaptureSession
+private final class CaptureContainerController: UIViewController {
+  private let cameraHost: UIHostingController<ObjectCaptureView<EmptyView>>
+  private let pointsHost: UIHostingController<ObjectCapturePointCloudView>
 
-  var body: some View {
-    ZStack {
-      ObjectCaptureView(session: session)
-      ObjectCapturePointCloudView(session: session)
-        .allowsHitTesting(false)
-    }
+  init(session: ObjectCaptureSession) {
+    cameraHost = UIHostingController(rootView: ObjectCaptureView(session: session))
+    pointsHost = UIHostingController(rootView: ObjectCapturePointCloudView(session: session))
+    super.init(nibName: nil, bundle: nil)
+  }
+
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
+  }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = .black
+    embed(cameraHost)
+    embed(pointsHost)
+    pointsHost.view.backgroundColor = .clear
+    pointsHost.view.isUserInteractionEnabled = false
+    let tint = UIView(frame: pointsHost.view.bounds)
+    tint.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    tint.isUserInteractionEnabled = false
+    tint.backgroundColor = UIColor(red: 0.2, green: 0.95, blue: 0.4, alpha: 1)
+    tint.layer.compositingFilter = "sourceIn"
+    pointsHost.view.addSubview(tint)
+    // Black stays invisible, so the green glitter sits on the camera.
+    pointsHost.view.layer.compositingFilter = "screen"
+    let glitter = CABasicAnimation(keyPath: "opacity")
+    glitter.fromValue = 0.2
+    glitter.toValue = 1
+    glitter.duration = 0.42
+    glitter.autoreverses = true
+    glitter.repeatCount = .infinity
+    glitter.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+    pointsHost.view.layer.add(glitter, forKey: "glitter")
+  }
+
+  private func embed(_ host: UIViewController) {
+    addChild(host)
+    host.view.frame = view.bounds
+    host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    view.addSubview(host.view)
+    host.didMove(toParent: self)
   }
 }
 
-/// Photo plan over the live camera: a circle around the object, then the top, then the underside.
+/// Live hint while photographing a small object: overlap the views you can actually reach.
 @available(iOS 17.0, *)
 private struct OrbitStoryboard: View {
   let shots: Int
-  let passComplete: Bool
+  let guidePhase: Int
 
   private let names = ObjectScanDriver.aroundNames
-  private let around = ObjectScanDriver.aroundCount
-  private let topEnd = ObjectScanDriver.aroundCount + ObjectScanDriver.topCount
-  private let total = ObjectScanDriver.requiredShots
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(ObjectScanDriver.nextPosition(shots: shots, passComplete: passComplete))
+      Text("Overlap the sides you can reach. Green is already photographed.")
         .font(.caption.weight(.semibold))
         .foregroundStyle(.white)
         .lineLimit(3)
@@ -409,36 +452,23 @@ private struct OrbitStoryboard: View {
         ForEach(names.indices, id: \.self) { index in
           ringStop(index)
         }
-        pole(title: "Top", symbol: "arrow.down.to.line", done: shots >= topEnd, isNext: shots >= around && shots < topEnd)
-          .offset(y: -74)
-        pole(title: "Under", symbol: "rotate.3d", done: shots >= total, isNext: shots >= topEnd && shots < total)
-          .offset(y: 74)
         Image(systemName: "cube")
           .font(.caption)
           .foregroundStyle(.white.opacity(0.9))
       }
-      .frame(width: 200, height: 190)
+      .frame(width: 200, height: 140)
     }
     .padding(10)
     .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
   }
 
   private func ringStop(_ index: Int) -> some View {
-    let done = shots > index
-    let isNext = shots < names.count && index == shots
+    let progress = min(1, Double(shots) / Double(names.count))
+    let filled = guidePhase > 1 || progress * Double(names.count) > Double(index)
     let angle = (Double(index) / Double(names.count)) * 2 * Double.pi - Double.pi / 2
     let radius = 50.0
-    return marker(done: done, isNext: isNext, symbol: "camera.fill")
+    return marker(done: filled, isNext: guidePhase == 1, symbol: "camera.fill")
       .offset(x: CGFloat(cos(angle) * radius), y: CGFloat(sin(angle) * radius))
-  }
-
-  private func pole(title: String, symbol: String, done: Bool, isNext: Bool) -> some View {
-    VStack(spacing: 2) {
-      marker(done: done, isNext: isNext, symbol: symbol)
-      Text(title)
-        .font(.system(size: 9, weight: .semibold))
-        .foregroundStyle(.white)
-    }
   }
 
   private func marker(done: Bool, isNext: Bool, symbol: String) -> some View {

@@ -25,6 +25,7 @@ final class LiDARScanViewController: UIViewController {
   private var isFinishing = false
   private var scanEpoch = 0
   private var preferredFormat: MeshExportFormat = LiDARScanRegistry.exportFormat
+  private var scanSubject: ScanSubject = .room
   private var objectPhase: ObjectPhase = .idle
   private var objectDriverBox: AnyObject?
   private var objectHost: UIViewController?
@@ -63,7 +64,13 @@ final class LiDARScanViewController: UIViewController {
   // MARK: - Public commands (Flutter channel + overlay)
 
   func startScan() {
-    if #available(iOS 17.0, *), PhotogrammetrySession.isSupported {
+    if scanSubject == .object {
+      guard #available(iOS 17.0, *), PhotogrammetrySession.isSupported else {
+        let message = "Object photos need iOS 17 on this iPhone. Choose Room to build from the LiDAR of what you scan."
+        overlay.showError(message)
+        emit(["type": "error", "code": "OBJECT_UNSUPPORTED", "message": message])
+        return
+      }
       startObjectScan()
       return
     }
@@ -87,6 +94,11 @@ final class LiDARScanViewController: UIViewController {
     isRunning = true
     isPaused = false
     refreshOverlayState()
+    overlay.showStatus("Walk the room")
+    overlay.updateTracking(
+      "Aim at walls, floor, and large pieces. LiDAR builds the 3D from the surfaces you actually scan. No view from above or below is required.",
+      level: "good"
+    )
     emit(["type": "scanState", "state": "running"])
   }
 
@@ -128,6 +140,8 @@ final class LiDARScanViewController: UIViewController {
     }
     arView.session.pause()
     overlay.prepareForNewScan()
+    overlay.setSubject(scanSubject, locked: false)
+    showIdleGuidance()
     emit(["type": "scanState", "state": "reset", "meshCount": 0])
     emit(["type": "meshCount", "count": 0])
   }
@@ -218,6 +232,8 @@ final class LiDARScanViewController: UIViewController {
   private func configureOverlay() {
     overlay.translatesAutoresizingMaskIntoConstraints = false
     overlay.delegate = self
+    overlay.setSubject(scanSubject, locked: false)
+    showIdleGuidance()
     view.addSubview(overlay)
     NSLayoutConstraint.activate([
       overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -240,11 +256,29 @@ final class LiDARScanViewController: UIViewController {
 
   private func refreshOverlayState() {
     overlay.updateMeshCount(meshAnchors.count)
+    overlay.setSubject(scanSubject, locked: isRunning || isPaused || isFinishing)
     overlay.updateScanState(
       isRunning: isRunning,
       isPaused: isPaused,
       canFinish: !meshAnchors.isEmpty && !isFinishing
     )
+  }
+
+  private func showIdleGuidance() {
+    switch scanSubject {
+    case .room:
+      overlay.showStatus("Room scan")
+      overlay.updateTracking(
+        "For a room or anything too big to look over. Walk and aim at the surfaces you want. Done builds that LiDAR mesh.",
+        level: "good"
+      )
+    case .object:
+      overlay.showStatus("Object scan")
+      overlay.updateTracking(
+        "For a small item you can walk around. The photos you take become the model. Skip any side you cannot reach.",
+        level: "good"
+      )
+    }
   }
 
   private func statusBusy(_ text: String) {
@@ -273,6 +307,16 @@ extension LiDARScanViewController: ScanOverlayControlsDelegate {
   }
 
   func overlayDidTapDone() { finishScan(format: preferredFormat.rawValue) }
+
+  func overlayDidSelectSubject(_ subject: ScanSubject) {
+    guard objectPhase == .idle, !isRunning, !isPaused, !isFinishing else {
+      overlay.setSubject(scanSubject, locked: true)
+      return
+    }
+    scanSubject = subject
+    showIdleGuidance()
+  }
+
   func overlayDidTapShoot() {
     if #available(iOS 17.0, *) {
       objectDriver?.shoot()
@@ -294,8 +338,7 @@ private extension LiDARScanViewController {
     case .detecting:
       beginObjectOrbit()
     case .capturing where objectDriver?.passComplete == true && !isPaused:
-      objectDriver?.beginFlippedPass()
-      overlay.showStatus("Follow the guide: top from above, or tip the object for the underside")
+      objectDriver?.continueCapturing()
       emit(["type": "scanState", "state": "running"])
     case .capturing where isPaused:
       objectDriver?.resume()
@@ -303,7 +346,7 @@ private extension LiDARScanViewController {
       isPaused = false
       objectPhase = .capturing
       refreshObjectControls()
-      overlay.showStatus("Follow the ring: around, then top, then tip the object for the underside")
+      overlay.showStatus("Keep moving so each photo overlaps the last one")
       emit(["type": "scanState", "state": "running"])
     default:
       break
@@ -325,7 +368,7 @@ private extension LiDARScanViewController {
     }
     driver.onShots = { [weak self] shots in
       guard let self else { return }
-      self.overlay.updateObjectCoverage(shots: shots, total: ObjectScanDriver.requiredShots)
+      self.overlay.updateObjectCoverage(shots: shots)
       self.refreshObjectControls(shots: shots)
       self.emit(["type": "meshCount", "count": shots])
     }
@@ -353,15 +396,18 @@ private extension LiDARScanViewController {
     isRunning = true
     isPaused = false
     refreshObjectControls()
-    overlay.showStatus("Follow the ring: around, then top, then tip the object for the underside")
-    overlay.updateTracking("Walk the circle. Then raise the phone for the top, and tip the object so the bottom faces you.", level: "good")
+    overlay.showStatus("Move so each photo overlaps the last one.")
+    overlay.updateTracking(
+      "Green glitter marks what is already photographed. Cover the sides you can reach. Tap Done to build from those photos.",
+      level: "good"
+    )
     emit(["type": "scanState", "state": "running"])
   }
 
   func finishObjectScan() {
     guard let driver = objectDriver else { return }
-    guard driver.shots >= ObjectScanDriver.requiredShots else {
-      let message = ObjectScanError.notEnoughViews(driver.shots).localizedDescription
+    guard driver.shots > 0 else {
+      let message = ObjectScanError.notEnoughViews.localizedDescription
       overlay.showError(message)
       emit(["type": "error", "code": "NEED_ORBIT", "message": message])
       return
@@ -369,8 +415,8 @@ private extension LiDARScanViewController {
     isFinishing = true
     objectPhase = .building
     let epoch = scanEpoch
-    overlay.showStatus("Building the 3D object…")
-    overlay.updateTracking("Photogrammetry is turning the orbit into a textured mesh. This can take a few minutes.", level: "warn")
+    overlay.showStatus("Building from the photos you took…")
+    overlay.updateTracking("The model uses these shots. This can take a few minutes.", level: "warn")
     refreshObjectControls()
     objectBuild = Task { [weak self] in
       guard let self else { return }
@@ -428,6 +474,8 @@ private extension LiDARScanViewController {
     retireObjectCapture()
     arView.isHidden = false
     overlay.prepareForNewScan()
+    overlay.setSubject(scanSubject, locked: false)
+    showIdleGuidance()
     emit(["type": "meshCount", "count": 0])
   }
 
@@ -448,10 +496,11 @@ private extension LiDARScanViewController {
     overlay.updateScanState(
       isRunning: isRunning,
       isPaused: isPaused,
-      canFinish: count >= ObjectScanDriver.requiredShots && !isFinishing && objectPhase == .capturing,
+      canFinish: count > 0 && !isFinishing && objectPhase == .capturing,
       preserveStatus: true
     )
-    overlay.showShootButton(objectPhase == .capturing && !isFinishing && !isPaused)
+    overlay.showShootButton(false)
+    overlay.setSubject(scanSubject, locked: objectPhase != .idle || isFinishing)
   }
 }
 

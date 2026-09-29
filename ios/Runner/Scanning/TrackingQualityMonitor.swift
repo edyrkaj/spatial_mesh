@@ -21,7 +21,7 @@ enum TrackingQualityMonitor {
     case .normal:
       return TrackingQualitySnapshot(
         state: "normal",
-        message: "Tracking OK — keep sweeping slowly across surfaces.",
+        message: "Tracking is steady. Keep aiming at the walls and objects you want in the model.",
         level: "good"
       )
     case .notAvailable:
