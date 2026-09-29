@@ -75,7 +75,7 @@ final class ObjectScanDriver: ObservableObject {
     }
     session.startDetecting()
     onShots?(0)
-    onStatus?("Center the object in the box, then tap Start", "warn")
+    onStatus?("Move until a box appears, then drag its edges so it hugs the object and leaves the room outside.", "warn")
   }
 
   func shoot() {
@@ -313,16 +313,25 @@ final class ObjectScanDriver: ObservableObject {
     if feedback.contains(.movingTooFast) {
       return "Slow down. Keep the object in frame and overlap the edge of the green mask."
     }
-    if feedback.contains(.objectTooFar) { return "Move closer to the object" }
-    if feedback.contains(.objectTooClose) { return "Step back so the whole object fits" }
+    if feedback.contains(.objectTooFar) { return "Move closer until the box surrounds the object." }
+    if feedback.contains(.objectTooClose) { return "Step back so the whole object fits inside the box." }
     if feedback.contains(.environmentTooDark) || feedback.contains(.environmentLowLight) {
       return "More light will make the real texture sharper"
     }
-    if feedback.contains(.outOfFieldOfView) { return "Keep the object inside the frame" }
-    if session.state == .capturing {
-      return "Skip the green areas. Cover what is still clear, overlapping the edge of the mask, then tap Done."
+    if feedback.contains(.outOfFieldOfView) { return "Bring the object back inside the box." }
+    if #available(iOS 17.4, *), feedback.contains(.objectNotDetected) {
+      return "Point at the object until the box locks onto it."
     }
-    return ""
+    switch session.state {
+    case .detecting:
+      return "Move until a box appears. Drag its edges so it hugs the object and leaves the room outside."
+    case .ready:
+      return "The box is the scan boundary. Drag it until it fits the object, then tap Start."
+    case .capturing:
+      return "Keep the object inside the box. Skip the green areas and cover what is still clear."
+    default:
+      return ""
+    }
   }
 
   static func readable(_ error: Error) -> String {

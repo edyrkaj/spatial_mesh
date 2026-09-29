@@ -28,6 +28,15 @@ final class ScanOverlayControls: UIView {
   private let shootButton = UIButton(type: .system)
   private let subjectControl = UISegmentedControl(items: ["Object", "Room"])
   private let stack = UIStackView()
+  private let aimPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+  private let aimSymbol = UIImageView()
+  private let aimLabel = UILabel()
+
+  /// Empty parts of the overlay stay transparent to touches so the object box underneath can be dragged.
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    let hit = super.hitTest(point, with: event)
+    return hit === self ? nil : hit
+  }
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -74,6 +83,22 @@ final class ScanOverlayControls: UIView {
     shootButton.isHidden = !visible
   }
 
+  func updateAim(symbol: String, text: String, level: String) {
+    aimSymbol.image = UIImage(systemName: symbol)
+    aimLabel.text = text
+    let color: UIColor
+    switch level {
+    case "good":
+      color = UIColor(red: 0.55, green: 0.95, blue: 0.7, alpha: 1)
+    case "warn":
+      color = UIColor(red: 1.0, green: 0.82, blue: 0.35, alpha: 1)
+    default:
+      color = UIColor(red: 1.0, green: 0.45, blue: 0.4, alpha: 1)
+    }
+    aimSymbol.tintColor = color
+    aimPanel.isHidden = false
+  }
+
   func showStatus(_ text: String) {
     statusLabel.numberOfLines = 3
     statusLabel.text = text
@@ -114,6 +139,7 @@ final class ScanOverlayControls: UIView {
     trackingLabel.text = "Waiting for AR session…"
     updateMeshCount(0)
     showShootButton(false)
+    aimPanel.isHidden = true
     updateScanState(isRunning: false, isPaused: false, canFinish: false)
   }
 
@@ -165,6 +191,24 @@ final class ScanOverlayControls: UIView {
     stack.addArrangedSubview(shootButton)
     stack.addArrangedSubview(buttons)
 
+    aimSymbol.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
+    aimSymbol.contentMode = .scaleAspectFit
+    aimSymbol.setContentHuggingPriority(.required, for: .horizontal)
+    aimLabel.font = .preferredFont(forTextStyle: .subheadline)
+    aimLabel.textColor = .white
+    aimLabel.numberOfLines = 3
+    let aimRow = UIStackView(arrangedSubviews: [aimSymbol, aimLabel])
+    aimRow.axis = .horizontal
+    aimRow.alignment = .center
+    aimRow.spacing = 10
+    aimRow.translatesAutoresizingMaskIntoConstraints = false
+    aimPanel.translatesAutoresizingMaskIntoConstraints = false
+    aimPanel.layer.cornerRadius = 16
+    aimPanel.clipsToBounds = true
+    aimPanel.isHidden = true
+    aimPanel.contentView.addSubview(aimRow)
+    addSubview(aimPanel)
+
     let panel = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     panel.translatesAutoresizingMaskIntoConstraints = false
     panel.layer.cornerRadius = 16
@@ -173,6 +217,14 @@ final class ScanOverlayControls: UIView {
     panel.contentView.addSubview(stack)
 
     NSLayoutConstraint.activate([
+      aimPanel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+      aimPanel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+      aimPanel.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 8),
+      aimRow.leadingAnchor.constraint(equalTo: aimPanel.contentView.leadingAnchor, constant: 14),
+      aimRow.trailingAnchor.constraint(equalTo: aimPanel.contentView.trailingAnchor, constant: -14),
+      aimRow.topAnchor.constraint(equalTo: aimPanel.contentView.topAnchor, constant: 12),
+      aimRow.bottomAnchor.constraint(equalTo: aimPanel.contentView.bottomAnchor, constant: -12),
+      aimSymbol.widthAnchor.constraint(equalToConstant: 28),
       panel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
       panel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
       panel.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -12),

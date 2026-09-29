@@ -30,6 +30,8 @@ final class LiDARScanViewController: UIViewController {
   private var objectDriverBox: AnyObject?
   private var objectHost: UIViewController?
   private var objectBuild: Task<Void, Never>?
+  private var poseSample = ScanPoseSample()
+  private var lastAim = ""
 
   private enum ObjectPhase {
     case idle
@@ -94,7 +96,14 @@ final class LiDARScanViewController: UIViewController {
     isRunning = true
     isPaused = false
     refreshOverlayState()
+    poseSample = ScanPoseSample()
+    lastAim = ""
     overlay.showStatus("Walk the room")
+    overlay.updateAim(
+      symbol: "iphone",
+      text: "Hold the phone upright at chest height and point it at the wall.",
+      level: "good"
+    )
     overlay.updateTracking(
       "A green mask covers surfaces already scanned. Leave those areas and aim at what is still clear.",
       level: "good"
@@ -139,6 +148,8 @@ final class LiDARScanViewController: UIViewController {
       arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
     }
     arView.session.pause()
+    poseSample = ScanPoseSample()
+    lastAim = ""
     overlay.prepareForNewScan()
     overlay.setSubject(scanSubject, locked: false)
     showIdleGuidance()
@@ -268,12 +279,22 @@ final class LiDARScanViewController: UIViewController {
     switch scanSubject {
     case .room:
       overlay.showStatus("Room scan")
+      overlay.updateAim(
+        symbol: "iphone",
+        text: "Hold the phone upright at chest height. Point it at the wall, then tap Start.",
+        level: "good"
+      )
       overlay.updateTracking(
         "For a room or anything too big to look over. Green marks what is already covered. Aim at the clear areas.",
         level: "good"
       )
     case .object:
       overlay.showStatus("Object scan")
+      overlay.updateAim(
+        symbol: "viewfinder",
+        text: "Hold the phone an arm's length away. The box you drag is the only part that gets scanned.",
+        level: "good"
+      )
       overlay.updateTracking(
         "For a small item you can walk around. The photos you take become the model. Skip any side you cannot reach.",
         level: "good"
@@ -359,9 +380,11 @@ private extension LiDARScanViewController {
     detachObjectCamera()
     let driver = ObjectScanDriver()
     driver.onStatus = { [weak self] message, level in
-      self?.overlay.showStatus(message)
-      self?.overlay.updateTracking(message, level: level)
-      self?.emit(["type": "tracking", "message": message, "level": level])
+      guard let self else { return }
+      self.overlay.showStatus(message)
+      self.overlay.updateTracking(message, level: level)
+      self.overlay.updateAim(symbol: "viewfinder", text: message, level: level)
+      self.emit(["type": "tracking", "message": message, "level": level])
     }
     driver.onCaptureClosed = { [weak self] in
       self?.detachObjectCamera()
@@ -386,7 +409,12 @@ private extension LiDARScanViewController {
     isRunning = false
     isPaused = false
     refreshObjectControls()
-    overlay.showStatus("Center the object in the box, then tap Start")
+    overlay.showStatus("Fit the box to the object")
+    overlay.updateAim(
+      symbol: "viewfinder",
+      text: "Drag the box edges so they hug the object. Leave the table and walls outside, then tap Start.",
+      level: "warn"
+    )
     emit(["type": "scanState", "state": "running"])
   }
 
@@ -397,6 +425,11 @@ private extension LiDARScanViewController {
     isPaused = false
     refreshObjectControls()
     overlay.showStatus("Move so each photo overlaps the last one.")
+    overlay.updateAim(
+      symbol: "figure.walk",
+      text: "Stay inside the box you set. Walk sideways and keep the object in the middle of it.",
+      level: "good"
+    )
     overlay.updateTracking(
       "Green marks what is already photographed. Skip those areas and cover what is still clear. Tap Done to build from those photos.",
       level: "good"
@@ -473,6 +506,8 @@ private extension LiDARScanViewController {
     eventDelegate?.scanController(self, didFinishWithPath: path, error: nil)
     retireObjectCapture()
     arView.isHidden = false
+    poseSample = ScanPoseSample()
+    lastAim = ""
     overlay.prepareForNewScan()
     overlay.setSubject(scanSubject, locked: false)
     showIdleGuidance()
@@ -506,8 +541,12 @@ private extension LiDARScanViewController {
 
 extension LiDARScanViewController: ARSessionDelegate {
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
-    guard isRunning else { return }
+    guard isRunning, scanSubject == .room, objectPhase == .idle else { return }
     colorCapture.record(frame)
+    let aim = ScanPoseCoach.room(frame: frame, sample: &poseSample)
+    guard aim.message != lastAim else { return }
+    lastAim = aim.message
+    overlay.updateAim(symbol: aim.symbol, text: aim.message, level: aim.level)
   }
 
   func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
