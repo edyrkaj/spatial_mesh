@@ -192,8 +192,13 @@ final class ObjectScanDriver: ObservableObject {
     detail: PhotogrammetrySession.Request.Detail
   ) async throws {
     var configuration = PhotogrammetrySession.Configuration()
-    configuration.sampleOrdering = .unordered
-    configuration.featureSensitivity = .normal
+    // The photos are one continuous walk, and only the inside of the box should become the model.
+    configuration.sampleOrdering = .sequential
+    configuration.featureSensitivity = .high
+    configuration.isObjectMaskingEnabled = true
+    if #available(iOS 18.0, *) {
+      configuration.ignoreBoundingBox = false
+    }
     let session = try PhotogrammetrySession(input: images, configuration: configuration)
     photogrammetry = session
     let request = PhotogrammetrySession.Request.modelFile(url: usdz, detail: detail)
@@ -251,7 +256,7 @@ final class ObjectScanDriver: ObservableObject {
     passComplete = passDone
     if passDone, !awaitingNextPass {
       awaitingNextPass = true
-      advanceGuide()
+      onStatus?("This side of the box is covered. Tap Done to build, or tap Start to scan more of the same object.", "good")
     } else if !passDone {
       awaitingNextPass = false
     }
@@ -263,13 +268,6 @@ final class ObjectScanDriver: ObservableObject {
     if !message.isEmpty {
       onStatus?(message, "good")
     }
-  }
-
-  private func advanceGuide() {
-    guidePhase = 1
-    session.beginNewScanPass()
-    passComplete = false
-    onStatus?("Keep moving so each view overlaps the last. Cover what you can reach, then tap Done.", "good")
   }
 
   static let aroundNames = [
@@ -328,7 +326,10 @@ final class ObjectScanDriver: ObservableObject {
     case .ready:
       return "The box is the scan boundary. Drag it until it fits the object, then tap Start."
     case .capturing:
-      return "Keep the object inside the box. Skip the green areas and cover what is still clear."
+      if session.userCompletedScanPass {
+        return "This side of the box is covered. Tap Done to build, or tap Start to scan more of the same object."
+      }
+      return "Keep the object inside the box. Green marks what is already covered."
     default:
       return ""
     }
@@ -393,11 +394,20 @@ private struct StableCaptureLayer: UIViewControllerRepresentable {
 @available(iOS 17.0, *)
 private final class CaptureContainerController: UIViewController {
   private let cameraHost: UIHostingController<ObjectCaptureView<EmptyView>>
-  private let pointsHost: UIHostingController<ObjectCapturePointCloudView>
+  private let pointsHost: UIHostingController<AnyView>
 
   init(session: ObjectCaptureSession) {
     cameraHost = UIHostingController(rootView: ObjectCaptureView(session: session))
-    pointsHost = UIHostingController(rootView: ObjectCapturePointCloudView(session: session))
+    var cloud = ObjectCapturePointCloudView(session: session)
+    if #available(iOS 18.0, *) {
+      cloud = cloud.showShotLocations(true)
+    }
+    let green = AnyView(
+      cloud
+        .colorMultiply(Color(red: 0.15, green: 1, blue: 0.4))
+        .allowsHitTesting(false)
+    )
+    pointsHost = UIHostingController(rootView: green)
     super.init(nibName: nil, bundle: nil)
   }
 
@@ -411,16 +421,16 @@ private final class CaptureContainerController: UIViewController {
     embed(cameraHost)
     embed(pointsHost)
     pointsHost.view.backgroundColor = .clear
+    pointsHost.view.isOpaque = false
     pointsHost.view.isUserInteractionEnabled = false
-    let tint = UIView(frame: pointsHost.view.bounds)
-    tint.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    tint.isUserInteractionEnabled = false
-    tint.backgroundColor = UIColor(red: 0.15, green: 0.92, blue: 0.38, alpha: 1)
-    tint.layer.compositingFilter = "sourceIn"
-    pointsHost.view.addSubview(tint)
-    // Black stays invisible, so the green mask sits on the photographed surface.
+    // Keep the camera visible and add the covered points in green.
     pointsHost.view.layer.compositingFilter = "screen"
-    pointsHost.view.layer.opacity = 0.92
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    cameraHost.view.frame = view.bounds
+    pointsHost.view.frame = view.bounds
   }
 
   private func embed(_ host: UIViewController) {

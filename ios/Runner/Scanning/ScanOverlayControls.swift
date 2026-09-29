@@ -64,7 +64,7 @@ final class ScanOverlayControls: UIView {
     meshCountLabel.numberOfLines = 2
     meshCountLabel.text = count == 0
       ? "Aim at walls and furniture. Green appears where the room is already covered."
-      : "Green is already covered. Leave it and aim at areas that are still clear."
+      : "Green is in the 3D model. Clear parts of the camera are not scanned yet."
   }
 
   func setSubject(_ subject: ScanSubject, locked: Bool) {
@@ -126,7 +126,7 @@ final class ScanOverlayControls: UIView {
   }
 
   func showCompleted(fileName: String) {
-    statusLabel.numberOfLines = 2
+    statusLabel.numberOfLines = 3
     statusLabel.text = "Scan completed\n\(fileName)"
     statusLabel.textColor = UIColor(red: 0.55, green: 0.95, blue: 0.7, alpha: 1)
   }

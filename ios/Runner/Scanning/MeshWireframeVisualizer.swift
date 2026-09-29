@@ -5,12 +5,11 @@ import simd
 /// Green mask on LiDAR surfaces that are already in the mesh. Clear areas are still unscanned.
 final class MeshWireframeVisualizer {
   private var entities: [UUID: ModelEntity] = [:]
-  private let material: UnlitMaterial
+  private let material: SimpleMaterial
 
   init() {
-    var mat = UnlitMaterial()
-    mat.color = .init(tint: UIColor(red: 0.15, green: 0.92, blue: 0.38, alpha: 1))
-    mat.blending = .transparent(opacity: 0.55)
+    var mat = SimpleMaterial(color: UIColor(red: 0.15, green: 0.95, blue: 0.32, alpha: 0.72), isMetallic: false)
+    mat.roughness = 1
     material = mat
   }
 
@@ -52,13 +51,25 @@ final class MeshWireframeVisualizer {
     let faceCount = geometry.faces.count
     guard vertexCount > 0, faceCount > 0 else { return nil }
 
+    let hasNormals = geometry.normals.count == vertexCount
     var positions: [SIMD3<Float>] = []
     positions.reserveCapacity(vertexCount)
     for index in 0..<vertexCount {
       let pointer = geometry.vertices.buffer.contents()
         .advanced(by: geometry.vertices.offset + geometry.vertices.stride * index)
       let floats = pointer.bindMemory(to: Float.self, capacity: 3)
-      positions.append(SIMD3<Float>(floats[0], floats[1], floats[2]))
+      var position = SIMD3<Float>(floats[0], floats[1], floats[2])
+      if hasNormals {
+        let normalPointer = geometry.normals.buffer.contents()
+          .advanced(by: geometry.normals.offset + geometry.normals.stride * index)
+        let normalFloats = normalPointer.bindMemory(to: Float.self, capacity: 3)
+        let normal = simd_normalize(SIMD3<Float>(normalFloats[0], normalFloats[1], normalFloats[2]))
+        if normal.x.isFinite, normal.y.isFinite, normal.z.isFinite {
+          // Sit the mask just in front of the real surface so the camera can see it.
+          position += normal * 0.02
+        }
+      }
+      positions.append(position)
     }
 
     var indices: [UInt32] = []

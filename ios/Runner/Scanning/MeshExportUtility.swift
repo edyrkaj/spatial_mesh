@@ -66,21 +66,15 @@ final class MeshExportUtility {
     basename: String
   ) throws -> URL {
     let processed: ProcessedMesh
-    if var dense = depthSurface(from: colorFrames) {
+    if !meshAnchors.isEmpty {
+      // The live mesh is every surface LiDAR has reconstructed, not a short patch of recent frames.
+      var full = try process(meshAnchors: meshAnchors)
+      full.colors = colors(for: full, from: colorFrames)
+      processed = full
+    } else if var dense = depthSurface(from: colorFrames) {
       dense = removeDegenerateTriangles(dense)
-      if !dense.indices.isEmpty {
-        processed = dense
-      } else if !meshAnchors.isEmpty {
-        var coarse = try process(meshAnchors: meshAnchors)
-        coarse.colors = colors(for: coarse, from: colorFrames)
-        processed = coarse
-      } else {
-        throw MeshExportError.emptyMesh
-      }
-    } else if !meshAnchors.isEmpty {
-      var coarse = try process(meshAnchors: meshAnchors)
-      coarse.colors = colors(for: coarse, from: colorFrames)
-      processed = coarse
+      guard !dense.indices.isEmpty else { throw MeshExportError.emptyMesh }
+      processed = dense
     } else {
       throw MeshExportError.emptyMesh
     }

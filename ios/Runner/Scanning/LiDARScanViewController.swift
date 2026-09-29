@@ -15,6 +15,8 @@ final class LiDARScanViewController: UIViewController {
 
   private var arView: ARView!
   private let overlay = ScanOverlayControls()
+  private let cameraGuide = CameraGuideOverlay()
+  private var coverageTick = 0
   private let visualizer = MeshWireframeVisualizer()
   private let exporter = MeshExportUtility()
   private let colorCapture = ScanColorCapture()
@@ -108,6 +110,7 @@ final class LiDARScanViewController: UIViewController {
       "A green mask covers surfaces already scanned. Leave those areas and aim at what is still clear.",
       level: "good"
     )
+    cameraGuide.setScanning(true)
     emit(["type": "scanState", "state": "running"])
   }
 
@@ -150,6 +153,8 @@ final class LiDARScanViewController: UIViewController {
     arView.session.pause()
     poseSample = ScanPoseSample()
     lastAim = ""
+    cameraGuide.setScanning(false)
+    cameraGuide.clearCoverage()
     overlay.prepareForNewScan()
     overlay.setSubject(scanSubject, locked: false)
     showIdleGuidance()
@@ -190,25 +195,35 @@ final class LiDARScanViewController: UIViewController {
       do {
         let directory = ScanStorage.directory
         let basename = "scan_\(Self.timestamp())"
-        let url = try self.exporter.export(
+        let usdz = try self.exporter.export(
           meshAnchors: anchors,
           colorFrames: frames,
-          format: self.preferredFormat,
+          format: .usdz,
           to: directory,
           basename: basename
         )
+        let gltf = try? self.exporter.export(
+          meshAnchors: anchors,
+          colorFrames: frames,
+          format: .gltf,
+          to: directory,
+          basename: basename
+        )
+        let savedName = [usdz.lastPathComponent, gltf?.lastPathComponent]
+          .compactMap { $0 }
+          .joined(separator: "\n")
         DispatchQueue.main.async {
           let stillCurrent = self.scanEpoch == epoch
           self.isFinishing = false
-          self.eventDelegate?.scanController(self, didFinishWithPath: url.path, error: nil)
+          self.eventDelegate?.scanController(self, didFinishWithPath: usdz.path, error: nil)
           guard stillCurrent else { return }
           self.pauseScan()
           self.refreshOverlayState()
-          self.overlay.showCompleted(fileName: url.lastPathComponent)
+          self.overlay.showCompleted(fileName: savedName)
           self.emit([
             "type": "exportComplete",
-            "path": url.path,
-            "format": self.preferredFormat.rawValue,
+            "path": usdz.path,
+            "format": "usdz",
           ])
         }
       } catch {
@@ -235,9 +250,14 @@ final class LiDARScanViewController: UIViewController {
     arView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     arView.session.delegate = self
     arView.renderOptions.insert(.disableMotionBlur)
+    // The coverage mask sits on the real surfaces. Occlusion would hide it.
+    arView.environment.sceneUnderstanding.options = []
     view.addSubview(arView)
     self.arView = arView
     visualizer.attach(to: arView)
+    cameraGuide.frame = view.bounds
+    cameraGuide.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    view.addSubview(cameraGuide)
   }
 
   private func configureOverlay() {
@@ -409,6 +429,7 @@ private extension LiDARScanViewController {
     isRunning = false
     isPaused = false
     refreshObjectControls()
+    cameraGuide.setScanning(true)
     overlay.showStatus("Fit the box to the object")
     overlay.updateAim(
       symbol: "viewfinder",
@@ -493,6 +514,7 @@ private extension LiDARScanViewController {
     host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     addChild(host)
     view.insertSubview(host.view, belowSubview: overlay)
+    view.insertSubview(cameraGuide, belowSubview: overlay)
     host.didMove(toParent: self)
     objectHost = host
   }
@@ -508,6 +530,8 @@ private extension LiDARScanViewController {
     arView.isHidden = false
     poseSample = ScanPoseSample()
     lastAim = ""
+    cameraGuide.setScanning(false)
+    cameraGuide.clearCoverage()
     overlay.prepareForNewScan()
     overlay.setSubject(scanSubject, locked: false)
     showIdleGuidance()
@@ -543,6 +567,15 @@ extension LiDARScanViewController: ARSessionDelegate {
   func session(_ session: ARSession, didUpdate frame: ARFrame) {
     guard isRunning, scanSubject == .room, objectPhase == .idle else { return }
     colorCapture.record(frame)
+    coverageTick += 1
+    if coverageTick.isMultiple(of: 2) {
+      let path = CameraGuideOverlay.coveragePath(
+        frame: frame,
+        anchors: Array(meshAnchors.values),
+        viewport: view.bounds.size
+      )
+      cameraGuide.setCoverage(path)
+    }
     let aim = ScanPoseCoach.room(frame: frame, sample: &poseSample)
     guard aim.message != lastAim else { return }
     lastAim = aim.message
@@ -589,5 +622,132 @@ extension LiDARScanViewController: ARSessionDelegate {
     }
     refreshOverlayState()
     emit(["type": "meshCount", "count": meshAnchors.count])
+  }
+}
+
+/// Corner frame and green coverage drawn in front of the live camera.
+final class CameraGuideOverlay: UIView {
+  private let coverageLayer = CAShapeLayer()
+  private let frameLayer = CAShapeLayer()
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    isUserInteractionEnabled = false
+    backgroundColor = .clear
+    coverageLayer.fillColor = UIColor(red: 0.1, green: 0.92, blue: 0.32, alpha: 0.38).cgColor
+    coverageLayer.strokeColor = UIColor.clear.cgColor
+    coverageLayer.lineWidth = 0
+    layer.addSublayer(coverageLayer)
+    frameLayer.fillColor = UIColor.clear.cgColor
+    frameLayer.strokeColor = UIColor(red: 0.2, green: 1, blue: 0.45, alpha: 1).cgColor
+    frameLayer.lineWidth = 5
+    frameLayer.lineCap = .round
+    layer.addSublayer(frameLayer)
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+
+  func setScanning(_ scanning: Bool) {
+    frameLayer.isHidden = !scanning
+    if !scanning {
+      clearCoverage()
+    }
+    setNeedsLayout()
+  }
+
+  func clearCoverage() {
+    coverageLayer.path = nil
+  }
+
+  func setCoverage(_ path: CGPath) {
+    coverageLayer.path = path
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    coverageLayer.frame = bounds
+    frameLayer.frame = bounds
+    frameLayer.path = Self.cornerPath(in: bounds.insetBy(dx: 28, dy: 96)).cgPath
+  }
+
+  /// Fills every reconstructed triangle the camera can currently see.
+  static func coveragePath(frame: ARFrame, anchors: [ARMeshAnchor], viewport: CGSize) -> CGPath {
+    let path = CGMutablePath()
+    guard viewport.width > 1, viewport.height > 1 else { return path }
+    let camera = simd_inverse(frame.camera.transform)
+    for anchor in anchors {
+      let geometry = anchor.geometry
+      let faceCount = geometry.faces.count
+      let vertices = geometry.vertices
+      let faces = geometry.faces
+      guard faceCount > 0, vertices.count > 0 else { continue }
+      for faceIndex in 0..<faceCount {
+        var screen = [CGPoint]()
+        screen.reserveCapacity(3)
+        var visible = true
+        for corner in 0..<min(3, faces.indexCountPerPrimitive) {
+          let byteOffset = (faceIndex * faces.indexCountPerPrimitive + corner) * faces.bytesPerIndex
+          let pointer = faces.buffer.contents().advanced(by: byteOffset)
+          let index: Int
+          if faces.bytesPerIndex == 2 {
+            index = Int(pointer.bindMemory(to: UInt16.self, capacity: 1).pointee)
+          } else {
+            index = Int(pointer.bindMemory(to: UInt32.self, capacity: 1).pointee)
+          }
+          guard index < vertices.count else {
+            visible = false
+            break
+          }
+          let vertexPointer = vertices.buffer.contents()
+            .advanced(by: vertices.offset + vertices.stride * index)
+          let floats = vertexPointer.bindMemory(to: Float.self, capacity: 3)
+          let local = SIMD4<Float>(floats[0], floats[1], floats[2], 1)
+          let world = anchor.transform * local
+          guard (camera * world).z < 0 else {
+            visible = false
+            break
+          }
+          let projected = frame.camera.projectPoint(
+            SIMD3<Float>(world.x, world.y, world.z),
+            orientation: .portrait,
+            viewportSize: viewport
+          )
+          guard projected.x.isFinite, projected.y.isFinite else {
+            visible = false
+            break
+          }
+          screen.append(projected)
+        }
+        guard visible, screen.count == 3 else { continue }
+        let onScreen = screen.contains { point in
+          point.x > -30 && point.y > -30 && point.x < viewport.width + 30 && point.y < viewport.height + 30
+        }
+        guard onScreen else { continue }
+        path.move(to: screen[0])
+        path.addLine(to: screen[1])
+        path.addLine(to: screen[2])
+        path.closeSubpath()
+      }
+    }
+    return path
+  }
+
+  private static func cornerPath(in rect: CGRect) -> UIBezierPath {
+    let path = UIBezierPath()
+    let length: CGFloat = 42
+    let corners = [
+      (rect.origin, CGVector(dx: 1, dy: 0), CGVector(dx: 0, dy: 1)),
+      (CGPoint(x: rect.maxX, y: rect.minY), CGVector(dx: -1, dy: 0), CGVector(dx: 0, dy: 1)),
+      (CGPoint(x: rect.minX, y: rect.maxY), CGVector(dx: 1, dy: 0), CGVector(dx: 0, dy: -1)),
+      (CGPoint(x: rect.maxX, y: rect.maxY), CGVector(dx: -1, dy: 0), CGVector(dx: 0, dy: -1)),
+    ]
+    for (origin, horizontal, vertical) in corners {
+      path.move(to: CGPoint(x: origin.x + horizontal.dx * length, y: origin.y + horizontal.dy * length))
+      path.addLine(to: origin)
+      path.addLine(to: CGPoint(x: origin.x + vertical.dx * length, y: origin.y + vertical.dy * length))
+    }
+    return path
   }
 }
