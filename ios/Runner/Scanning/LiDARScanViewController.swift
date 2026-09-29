@@ -96,7 +96,7 @@ final class LiDARScanViewController: UIViewController {
     refreshOverlayState()
     overlay.showStatus("Walk the room")
     overlay.updateTracking(
-      "Aim at walls, floor, and large pieces. LiDAR builds the 3D from the surfaces you actually scan. No view from above or below is required.",
+      "A green mask covers surfaces already scanned. Leave those areas and aim at what is still clear.",
       level: "good"
     )
     emit(["type": "scanState", "state": "running"])
@@ -269,7 +269,7 @@ final class LiDARScanViewController: UIViewController {
     case .room:
       overlay.showStatus("Room scan")
       overlay.updateTracking(
-        "For a room or anything too big to look over. Walk and aim at the surfaces you want. Done builds that LiDAR mesh.",
+        "For a room or anything too big to look over. Green marks what is already covered. Aim at the clear areas.",
         level: "good"
       )
     case .object:
@@ -398,7 +398,7 @@ private extension LiDARScanViewController {
     refreshObjectControls()
     overlay.showStatus("Move so each photo overlaps the last one.")
     overlay.updateTracking(
-      "Green glitter marks what is already photographed. Cover the sides you can reach. Tap Done to build from those photos.",
+      "Green marks what is already photographed. Skip those areas and cover what is still clear. Tap Done to build from those photos.",
       level: "good"
     )
     emit(["type": "scanState", "state": "running"])

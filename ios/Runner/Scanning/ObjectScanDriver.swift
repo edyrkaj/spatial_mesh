@@ -93,7 +93,7 @@ final class ObjectScanDriver: ObservableObject {
     didStartCapturing = true
     guidePhase = 1
     session.startCapturing()
-    onStatus?("Move so each photo overlaps the last one. Green glitter marks what is already scanned.", "good")
+    onStatus?("Move so each photo overlaps the last one. Green marks areas already covered.", "good")
   }
 
   func pause() {
@@ -105,7 +105,7 @@ final class ObjectScanDriver: ObservableObject {
   func resume() {
     guard session.isPaused else { return }
     session.resume()
-    onStatus?("Keep moving. Green glitter shows the parts already scanned.", "good")
+    onStatus?("Keep moving. Skip the green areas and cover what is still clear.", "good")
   }
 
   /// Keeps capturing the same object. A new pass continues from the photos already taken
@@ -311,7 +311,7 @@ final class ObjectScanDriver: ObservableObject {
   private static func coaching(_ session: ObjectCaptureSession, guidePhase: Int) -> String {
     let feedback = session.feedback
     if feedback.contains(.movingTooFast) {
-      return "Slow down. Keep the object in frame and overlap the green glitter."
+      return "Slow down. Keep the object in frame and overlap the edge of the green mask."
     }
     if feedback.contains(.objectTooFar) { return "Move closer to the object" }
     if feedback.contains(.objectTooClose) { return "Step back so the whole object fits" }
@@ -320,7 +320,7 @@ final class ObjectScanDriver: ObservableObject {
     }
     if feedback.contains(.outOfFieldOfView) { return "Keep the object inside the frame" }
     if session.state == .capturing {
-      return "Move so the next photo overlaps the green glitter. Cover the sides you can reach, then tap Done."
+      return "Skip the green areas. Cover what is still clear, overlapping the edge of the mask, then tap Done."
     }
     return ""
   }
@@ -368,7 +368,7 @@ struct ObjectScanCamera: View {
   }
 }
 
-/// Camera plus a glittering point cloud on the surfaces already photographed.
+/// Camera plus a steady green mask on the surfaces already photographed.
 /// Both capture views are created once, so they are not built again after the session ends.
 @available(iOS 17.0, *)
 private struct StableCaptureLayer: UIViewControllerRepresentable {
@@ -406,19 +406,12 @@ private final class CaptureContainerController: UIViewController {
     let tint = UIView(frame: pointsHost.view.bounds)
     tint.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     tint.isUserInteractionEnabled = false
-    tint.backgroundColor = UIColor(red: 0.2, green: 0.95, blue: 0.4, alpha: 1)
+    tint.backgroundColor = UIColor(red: 0.15, green: 0.92, blue: 0.38, alpha: 1)
     tint.layer.compositingFilter = "sourceIn"
     pointsHost.view.addSubview(tint)
-    // Black stays invisible, so the green glitter sits on the camera.
+    // Black stays invisible, so the green mask sits on the photographed surface.
     pointsHost.view.layer.compositingFilter = "screen"
-    let glitter = CABasicAnimation(keyPath: "opacity")
-    glitter.fromValue = 0.2
-    glitter.toValue = 1
-    glitter.duration = 0.42
-    glitter.autoreverses = true
-    glitter.repeatCount = .infinity
-    glitter.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-    pointsHost.view.layer.add(glitter, forKey: "glitter")
+    pointsHost.view.layer.opacity = 0.92
   }
 
   private func embed(_ host: UIViewController) {
@@ -440,7 +433,7 @@ private struct OrbitStoryboard: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text("Overlap the sides you can reach. Green is already photographed.")
+      Text("Green is already covered. Leave it and photograph what is still clear.")
         .font(.caption.weight(.semibold))
         .foregroundStyle(.white)
         .lineLimit(3)

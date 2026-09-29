@@ -54,8 +54,8 @@ final class ScanOverlayControls: UIView {
   func updateMeshCount(_ count: Int) {
     meshCountLabel.numberOfLines = 2
     meshCountLabel.text = count == 0
-      ? "Aim at walls, floor, and furniture. The mesh is what you scanned."
-      : "Surfaces scanned: \(count). Keep aiming at what you want in the model."
+      ? "Aim at walls and furniture. Green appears where the room is already covered."
+      : "Green is already covered. Leave it and aim at areas that are still clear."
   }
 
   func setSubject(_ subject: ScanSubject, locked: Bool) {
@@ -66,8 +66,8 @@ final class ScanOverlayControls: UIView {
   func updateObjectCoverage(shots: Int) {
     meshCountLabel.numberOfLines = 2
     meshCountLabel.text = shots == 0
-      ? "Fit the object in the box, then walk. Green glitter shows what is scanned."
-      : "Photos \(shots) · more makes a sharper model"
+      ? "Fit the object in the box, then walk. Green marks areas already photographed."
+      : "Photos \(shots). Skip the green areas and cover what is still clear."
   }
 
   func showShootButton(_ visible: Bool) {

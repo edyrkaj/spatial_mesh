@@ -2,14 +2,15 @@ import ARKit
 import RealityKit
 import simd
 
-/// Builds translucent wireframe-style RealityKit entities from ARMeshAnchors.
+/// Green mask on LiDAR surfaces that are already in the mesh. Clear areas are still unscanned.
 final class MeshWireframeVisualizer {
   private var entities: [UUID: ModelEntity] = [:]
   private let material: UnlitMaterial
 
   init() {
     var mat = UnlitMaterial()
-    mat.color = .init(tint: .init(red: 0.35, green: 0.85, blue: 0.95, alpha: 0.16))
+    mat.color = .init(tint: UIColor(red: 0.15, green: 0.92, blue: 0.38, alpha: 1))
+    mat.blending = .transparent(opacity: 0.55)
     material = mat
   }
 
